@@ -361,3 +361,13 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+#I ADD
+# Local Visual Studio files
+.vs/
+
+# CMake build results
+out/
+
+# Local CMake settings
+CMakeUserPresets.json
