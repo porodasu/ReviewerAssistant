@@ -85,6 +85,13 @@
            </column>
           </widget>
          </item>
+         <item>
+          <widget class="QPushButton" name="btnRefreshParticipants">
+           <property name="text">
+            <string>Обновить список</string>
+           </property>
+          </widget>
+         </item>
         </layout>
        </widget>
       </item>

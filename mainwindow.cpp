@@ -7,6 +7,7 @@
 #include <QFileInfo> // для просмотра информации о файле
 #include <QDesktopServices> // доступ к рабочему столу (действиям)
 #include <QUrl> // прямое обращение по ссылкам
+#include <QFileDialog> // выбор папок и файлов в графическом интерфейсе
 
 
 
@@ -39,6 +40,50 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui.setupUi(this);
 
+
+    // Выбор архива
+    connect(ui.btnSelectArchive, &QPushButton::clicked,
+        this, [this]() {
+
+            QString path = QFileDialog::getOpenFileName( // открытие окна выбора файла
+                this,
+                "Выберите архив",
+                QDir::homePath(), // начальная папка пользователя
+                "ZIP-архивы (*.zip)"
+            );
+
+            // Если пользователь ничего не выбрал
+            if (path.isEmpty()) {
+                return;
+            }
+
+            // Запоминаем путь
+            selectedArchivePath = path;
+
+            // Показываем название выбранного архива
+            ui.lblArchivePath->setText(QFileInfo(path).fileName());
+            ui.lblArchivePath->setToolTip(path);
+
+            // Разрешаем распаковку
+            ui.btnExtractArchive->setEnabled(true);
+        });
+
+
+    // Временный обработчик распаковки
+    connect(ui.btnExtractArchive, &QPushButton::clicked,
+        this, [this]() {
+
+            if (selectedArchivePath.isEmpty()) {
+                return;
+            }
+
+            QMessageBox::information(this, "Распаковка",
+                "Выбран архив:\n" + selectedArchivePath +
+                "\n\nМодуль распаковки пока не подключён.");
+        });
+
+
+
     // Находим папку "Документы"
     QString documents = QStandardPaths::writableLocation(
         QStandardPaths::DocumentsLocation);
@@ -62,22 +107,21 @@ MainWindow::MainWindow(QWidget *parent)
 
     statusBar()->showMessage("Рабочий каталог готов");
 
-    // Открываем папку участников
-    QDir participantsDir(dir.filePath(folder));
+    /* Открываем папку участников  */
 
-    // Получаем список папок участников
-    QStringList folders = participantsDir.entryList(
-        QDir::Dirs | QDir::NoDotAndDotDot,
-        QDir::Name
-    );
+    // Запоминаем путь к папке участников
+    participantsPath = dir.filePath(folder);
+    QDir participantsDir(participantsPath);
 
-    // Добавляем участников в дерево
-    for (const QString& name : folders) {
-        QTreeWidgetItem* item =
-            new QTreeWidgetItem(ui.treeParticipants);
+    // Загружаем участников при запуске
+    refreshParticipants();
 
-        item->setText(0, name);
-    }
+    // Обновляем список по нажатию кнопки
+    connect(ui.btnRefreshParticipants, &QPushButton::clicked,
+        this, [this]() {
+            refreshParticipants();
+        });
+
 
     // При выборе участника показываем его файлы (через сигналы)
 
@@ -122,4 +166,38 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {}
+
+
+void MainWindow::refreshParticipants()
+{
+    // Очищаем старые списки
+    ui.treeParticipants->clear();
+    ui.treeFiles->clear();
+
+    QDir dir(participantsPath);
+
+    // Проверяем существование каталога
+    if (!dir.exists()) {
+        QMessageBox::warning(this, "Ошибка",
+            "Папка участников не найдена");
+        return;
+    }
+
+    // Получаем список папок
+    QStringList folders = dir.entryList(
+        QDir::Dirs | QDir::NoDotAndDotDot,
+        QDir::Name
+    );
+
+    // Добавляем участников
+    for (const QString& name : folders) {
+        QTreeWidgetItem* item =
+            new QTreeWidgetItem(ui.treeParticipants);
+
+        item->setText(0, name);
+    }
+
+    statusBar()->showMessage("Список участников обновлён");
+}
+
 
