@@ -1,7 +1,8 @@
 #include "ArchiveExtractor.h"
 
-#include <iostream>
 #include <filesystem>
+#include <iostream>
+#include <string>
 
 int main()
 {
@@ -12,40 +13,26 @@ int main()
     const std::filesystem::path archivePath =
         R"(D:\repos\test.zip)";
 
-#include "ArchiveExtractor.h"
+    const std::filesystem::path destination =
+        R"(D:\repos\test_extracted_3)";
 
-#include <filesystem>
-#include <iostream>
-#include <string>
+    const bool success =
+        extractor.extract(
+            archivePath,
+            destination,
+            errorMessage);
 
-    int main()
+    if (success)
     {
-        ArchiveExtractor extractor;
-
-        std::string errorMessage;
-
-        const std::filesystem::path archivePath =
-            R"(D:\repos\test.zip)";
-
-        const std::filesystem::path destination =
-            R"(D:\repos\test_extracted_2)";
-
-        const bool success =
-            extractor.extract(
-                archivePath,
-                destination,
-                errorMessage);
-
-        if (success)
-        {
-            std::cout << "Тест прошёл: архив распакован."
-                << std::endl;
-            return 0;
-        }
-
-        std::cout << "Ошибка: "
-            << errorMessage
+        std::cout << "Тест прошёл: архив распакован."
             << std::endl;
 
-        return 1;
+        return 0;
     }
+
+    std::cout << "Ошибка: "
+        << errorMessage
+        << std::endl;
+
+    return 1;
+}

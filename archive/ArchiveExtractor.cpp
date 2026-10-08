@@ -7,6 +7,10 @@
 #include <fstream>
 #include <string>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace
 {
     bool isSafePath(const std::filesystem::path& path)
@@ -25,6 +29,35 @@ namespace
         return true;
     }
 
+    bool hasReparsePoint(const std::filesystem::path& path)
+    {
+        #ifdef _WIN32
+        std::filesystem::path current;
+
+        if (!path.root_name().empty())
+            current = path.root_name();
+
+        if (!path.root_directory().empty())
+            current /= path.root_directory();
+
+        for (const auto& part : path.relative_path())
+        {
+            current /= part;
+
+            DWORD attributes =
+                GetFileAttributesW(current.c_str());
+
+            if (attributes != INVALID_FILE_ATTRIBUTES &&
+                (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            {
+                return true;
+            }
+        }
+        #endif
+
+        return false;
+    }
+
     std::string archiveError(struct archive* archive)
     {
         const char* message = archive_error_string(archive);
@@ -41,6 +74,7 @@ bool ArchiveExtractor::extract(
     const std::filesystem::path& destination,
     std::string& errorMessage)
 {
+
     errorMessage.clear();
 
     // Проверяем существование архива.
@@ -94,6 +128,7 @@ bool ArchiveExtractor::extract(
     }
 
     struct archive_entry* entry = nullptr;
+
 
     // Читаем все элементы архива.
     while (true)
@@ -154,6 +189,17 @@ bool ArchiveExtractor::extract(
         std::filesystem::path outputPath =
             destination / relativePath;
 
+        if (hasReparsePoint(outputPath))
+        {
+            errorMessage =
+                "Небезопасный путь: обнаружена символическая ссылка "
+                "или точка повторного анализа: " +
+                outputPath.string();
+
+            archive_read_free(archive);
+            return false;
+        }
+
         // Если это папка.
         if (archive_entry_filetype(entry) == AE_IFDIR)
         {
@@ -197,6 +243,29 @@ bool ArchiveExtractor::extract(
             errorMessage =
                 "Не удалось создать папку: " +
                 outputPath.parent_path().string() +
+                ". " +
+                filesystemError.message();
+
+            archive_read_free(archive);
+            return false;
+        }
+
+        // Не перезаписываем существующие файлы.
+        if (std::filesystem::exists(outputPath, filesystemError))
+        {
+            errorMessage =
+                "Файл уже существует: " +
+                outputPath.string();
+
+            archive_read_free(archive);
+            return false;
+        }
+
+        if (filesystemError)
+        {
+            errorMessage =
+                "Не удалось проверить существование файла: " +
+                outputPath.string() +
                 ". " +
                 filesystemError.message();
 
