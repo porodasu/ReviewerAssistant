@@ -371,3 +371,12 @@ out/
 
 # Local CMake settings
 CMakeUserPresets.json
+# Local build and vcpkg files
+build/
+vcpkg_installed/
+
+# Local archive tests
+test.zip
+test_archive/
+test_extracted/
+security_test/

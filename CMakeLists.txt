@@ -13,6 +13,10 @@ find_package(Qt${QT_VERSION_MAJOR}
         Gui
         Widgets
 )
+
+
+find_package(LibArchive REQUIRED)
+
 qt_standard_project_setup()
 
 set(PROJECT_SOURCES
@@ -20,9 +24,22 @@ set(PROJECT_SOURCES
     mainwindow.ui
     mainwindow.h
     mainwindow.cpp
+
+    archive/ArchiveExtractor.h
+    archive/ArchiveExtractor.cpp
 )
 
 qt_add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
+
+add_executable(ArchiveExtractorTest
+    archive/ArchiveExtractorTest.cpp
+    archive/ArchiveExtractor.cpp
+)
+
+target_link_libraries(ArchiveExtractorTest
+    PRIVATE
+        LibArchive::LibArchive
+)
 
 set_target_properties(${PROJECT_NAME}
     PROPERTIES
@@ -34,5 +51,6 @@ target_link_libraries(${PROJECT_NAME}
         Qt::Core
         Qt::Gui
         Qt::Widgets
+        LibArchive::LibArchive
 )
 
