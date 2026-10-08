@@ -1,5 +1,7 @@
 #include "mainwindow.h"
 #include <QDir>
+#include "archive/ArchiveExtractor.h" // распоковщик Никиты
+#include <filesystem> // для пути
 #include <QStandardPaths> // для нахождения стандартных путей
 #include <QMessageBox> // отображение
 #include <QStatusBar> // отобрадение чего-либо в нижнем углу (logs)
@@ -68,8 +70,7 @@ MainWindow::MainWindow(QWidget *parent)
             ui.btnExtractArchive->setEnabled(true);
         });
 
-
-    // Временный обработчик распаковки
+    // Распаковка выбранного архива
     connect(ui.btnExtractArchive, &QPushButton::clicked,
         this, [this]() {
 
@@ -77,10 +78,29 @@ MainWindow::MainWindow(QWidget *parent)
                 return;
             }
 
-            QMessageBox::information(this, "Распаковка",
-                "Выбран архив:\n" + selectedArchivePath +
-                "\n\nМодуль распаковки пока не подключён.");
+            ArchiveExtractor extractor;
+            std::string errorMessage;
+
+            bool success = extractor.extract(
+                std::filesystem::path(selectedArchivePath.toStdWString()),
+                std::filesystem::path(participantsPath.toStdWString()),
+                errorMessage
+            );
+
+            if (success) {
+                refreshParticipants();
+
+                QMessageBox::information(this, "Готово",
+                    "Архив успешно распакован!");
+            }
+            else {
+                QMessageBox::warning(this, "Ошибка распаковки",
+
+                    QString::fromUtf8(errorMessage.c_str()));
+
+            }
         });
+
 
 
 

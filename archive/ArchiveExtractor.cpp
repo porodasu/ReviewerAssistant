@@ -1,4 +1,4 @@
-#include "ArchiveExtractor.h"
+п»ї#include "ArchiveExtractor.h"
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -15,11 +15,11 @@ namespace
 {
     bool isSafePath(const std::filesystem::path& path)
     {
-        // Запрещаем абсолютные пути и пути с именем диска.
+        // Р—Р°РїСЂРµС‰Р°РµРј Р°Р±СЃРѕР»СЋС‚РЅС‹Рµ РїСѓС‚Рё Рё РїСѓС‚Рё СЃ РёРјРµРЅРµРј РґРёСЃРєР°.
         if (path.is_absolute() || !path.root_name().empty())
             return false;
 
-        // Запрещаем выход из папки назначения через "..".
+        // Р—Р°РїСЂРµС‰Р°РµРј РІС‹С…РѕРґ РёР· РїР°РїРєРё РЅР°Р·РЅР°С‡РµРЅРёСЏ С‡РµСЂРµР· "..".
         for (const auto& part : path)
         {
             if (part == "..")
@@ -65,7 +65,7 @@ namespace
         if (message != nullptr)
             return message;
 
-        return "Неизвестная ошибка libarchive";
+        return "РќРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР° libarchive";
     }
 }
 
@@ -77,14 +77,14 @@ bool ArchiveExtractor::extract(
 
     errorMessage.clear();
 
-    // Проверяем существование архива.
+    // РџСЂРѕРІРµСЂСЏРµРј СЃСѓС‰РµСЃС‚РІРѕРІР°РЅРёРµ Р°СЂС…РёРІР°.
     if (!std::filesystem::exists(archivePath))
     {
-        errorMessage = "Архив не найден: " + archivePath.string();
+        errorMessage = "РђСЂС…РёРІ РЅРµ РЅР°Р№РґРµРЅ: " + archivePath.string();
         return false;
     }
 
-    // Создаём папку назначения.
+    // РЎРѕР·РґР°С‘Рј РїР°РїРєСѓ РЅР°Р·РЅР°С‡РµРЅРёСЏ.
     std::error_code filesystemError;
 
     std::filesystem::create_directories(destination, filesystemError);
@@ -92,7 +92,7 @@ bool ArchiveExtractor::extract(
     if (filesystemError)
     {
         errorMessage =
-            "Не удалось создать папку назначения: " +
+            "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РїР°РїРєСѓ РЅР°Р·РЅР°С‡РµРЅРёСЏ: " +
             destination.string() +
             ". " +
             filesystemError.message();
@@ -100,27 +100,29 @@ bool ArchiveExtractor::extract(
         return false;
     }
 
-    // Создаём объект для чтения архива.
+    // РЎРѕР·РґР°С‘Рј РѕР±СЉРµРєС‚ РґР»СЏ С‡С‚РµРЅРёСЏ Р°СЂС…РёРІР°.
     struct archive* archive = archive_read_new();
 
     if (archive == nullptr)
     {
-        errorMessage = "Не удалось создать объект libarchive.";
+        errorMessage = "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РѕР±СЉРµРєС‚ libarchive.";
         return false;
     }
 
-    // Поддерживаем доступные форматы и фильтры.
+    // РџРѕРґРґРµСЂР¶РёРІР°РµРј РґРѕСЃС‚СѓРїРЅС‹Рµ С„РѕСЂРјР°С‚С‹ Рё С„РёР»СЊС‚СЂС‹.
     archive_read_support_filter_all(archive);
     archive_read_support_format_all(archive);
 
-    // Открываем архив.
-    if (archive_read_open_filename(
+    // РћС‚РєСЂС‹РІР°РµРј Р°СЂС…РёРІ.
+
+    if (archive_read_open_filename_w(
         archive,
-        archivePath.string().c_str(),
+        archivePath.c_str(),
         10240) != ARCHIVE_OK)
+
     {
         errorMessage =
-            "Не удалось открыть архив: " +
+            "РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєСЂС‹С‚СЊ Р°СЂС…РёРІ: " +
             archiveError(archive);
 
         archive_read_free(archive);
@@ -130,7 +132,7 @@ bool ArchiveExtractor::extract(
     struct archive_entry* entry = nullptr;
 
 
-    // Читаем все элементы архива.
+    // Р§РёС‚Р°РµРј РІСЃРµ СЌР»РµРјРµРЅС‚С‹ Р°СЂС…РёРІР°.
     while (true)
     {
         int result = archive_read_next_header(archive, &entry);
@@ -141,45 +143,46 @@ bool ArchiveExtractor::extract(
         if (result != ARCHIVE_OK)
         {
             errorMessage =
-                "Ошибка чтения архива: " +
+                "РћС€РёР±РєР° С‡С‚РµРЅРёСЏ Р°СЂС…РёРІР°: " +
                 archiveError(archive);
 
             archive_read_free(archive);
             return false;
         }
 
-        const char* entryName = archive_entry_pathname(entry);
 
-        if (entryName == nullptr || entryName[0] == '\0')
+        const wchar_t* entryName = archive_entry_pathname_w(entry);
+
+        if (entryName == nullptr || entryName[0] == L'\0')
         {
-            errorMessage = "Архив содержит элемент с пустым именем.";
-
+            errorMessage = "РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕС‡РёС‚Р°С‚СЊ РёРјСЏ СЌР»РµРјРµРЅС‚Р° Р°СЂС…РёРІР°.";
             archive_read_free(archive);
             return false;
         }
 
-        std::string entryNameString(entryName);
+        std::filesystem::path relativePath(entryName);
+        std::string entryNameString = relativePath.u8string();
 
-        // Не разрешаем обратный слеш.
-        // На Windows он является разделителем пути.
+
+        // РќРµ СЂР°Р·СЂРµС€Р°РµРј РѕР±СЂР°С‚РЅС‹Р№ СЃР»РµС€.
+        // РќР° Windows РѕРЅ СЏРІР»СЏРµС‚СЃСЏ СЂР°Р·РґРµР»РёС‚РµР»РµРј РїСѓС‚Рё.
         if (entryNameString.find('\\') != std::string::npos)
         {
             errorMessage =
-                "Небезопасный путь в архиве: " +
+                "РќРµР±РµР·РѕРїР°СЃРЅС‹Р№ РїСѓС‚СЊ РІ Р°СЂС…РёРІРµ: " +
                 entryNameString;
 
             archive_read_free(archive);
             return false;
         }
 
-        std::filesystem::path relativePath =
-            std::filesystem::u8path(entryNameString);
+        
 
-        // Защита от ../../file.txt и абсолютных путей.
+        // Р—Р°С‰РёС‚Р° РѕС‚ ../../file.txt Рё Р°Р±СЃРѕР»СЋС‚РЅС‹С… РїСѓС‚РµР№.
         if (!isSafePath(relativePath))
         {
             errorMessage =
-                "Небезопасный путь в архиве: " +
+                "РќРµР±РµР·РѕРїР°СЃРЅС‹Р№ РїСѓС‚СЊ РІ Р°СЂС…РёРІРµ: " +
                 entryNameString;
 
             archive_read_free(archive);
@@ -192,15 +195,15 @@ bool ArchiveExtractor::extract(
         if (hasReparsePoint(outputPath))
         {
             errorMessage =
-                "Небезопасный путь: обнаружена символическая ссылка "
-                "или точка повторного анализа: " +
+                "РќРµР±РµР·РѕРїР°СЃРЅС‹Р№ РїСѓС‚СЊ: РѕР±РЅР°СЂСѓР¶РµРЅР° СЃРёРјРІРѕР»РёС‡РµСЃРєР°СЏ СЃСЃС‹Р»РєР° "
+                "РёР»Рё С‚РѕС‡РєР° РїРѕРІС‚РѕСЂРЅРѕРіРѕ Р°РЅР°Р»РёР·Р°: " +
                 outputPath.string();
 
             archive_read_free(archive);
             return false;
         }
 
-        // Если это папка.
+        // Р•СЃР»Рё СЌС‚Рѕ РїР°РїРєР°.
         if (archive_entry_filetype(entry) == AE_IFDIR)
         {
             std::filesystem::create_directories(
@@ -210,7 +213,7 @@ bool ArchiveExtractor::extract(
             if (filesystemError)
             {
                 errorMessage =
-                    "Не удалось создать папку: " +
+                    "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РїР°РїРєСѓ: " +
                     outputPath.string() +
                     ". " +
                     filesystemError.message();
@@ -222,18 +225,18 @@ bool ArchiveExtractor::extract(
             continue;
         }
 
-        // Пока поддерживаем обычные файлы.
+        // РџРѕРєР° РїРѕРґРґРµСЂР¶РёРІР°РµРј РѕР±С‹С‡РЅС‹Рµ С„Р°Р№Р»С‹.
         if (archive_entry_filetype(entry) != AE_IFREG)
         {
             errorMessage =
-                "Неподдерживаемый тип элемента архива: " +
+                "РќРµРїРѕРґРґРµСЂР¶РёРІР°РµРјС‹Р№ С‚РёРї СЌР»РµРјРµРЅС‚Р° Р°СЂС…РёРІР°: " +
                 entryNameString;
 
             archive_read_free(archive);
             return false;
         }
 
-        // Создаём родительскую папку.
+        // РЎРѕР·РґР°С‘Рј СЂРѕРґРёС‚РµР»СЊСЃРєСѓСЋ РїР°РїРєСѓ.
         std::filesystem::create_directories(
             outputPath.parent_path(),
             filesystemError);
@@ -241,7 +244,7 @@ bool ArchiveExtractor::extract(
         if (filesystemError)
         {
             errorMessage =
-                "Не удалось создать папку: " +
+                "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РїР°РїРєСѓ: " +
                 outputPath.parent_path().string() +
                 ". " +
                 filesystemError.message();
@@ -250,11 +253,11 @@ bool ArchiveExtractor::extract(
             return false;
         }
 
-        // Не перезаписываем существующие файлы.
+        // РќРµ РїРµСЂРµР·Р°РїРёСЃС‹РІР°РµРј СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёРµ С„Р°Р№Р»С‹.
         if (std::filesystem::exists(outputPath, filesystemError))
         {
             errorMessage =
-                "Файл уже существует: " +
+                "Р¤Р°Р№Р» СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓРµС‚: " +
                 outputPath.string();
 
             archive_read_free(archive);
@@ -264,7 +267,7 @@ bool ArchiveExtractor::extract(
         if (filesystemError)
         {
             errorMessage =
-                "Не удалось проверить существование файла: " +
+                "РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕРІРµСЂРёС‚СЊ СЃСѓС‰РµСЃС‚РІРѕРІР°РЅРёРµ С„Р°Р№Р»Р°: " +
                 outputPath.string() +
                 ". " +
                 filesystemError.message();
@@ -273,7 +276,7 @@ bool ArchiveExtractor::extract(
             return false;
         }
 
-        // Открываем файл для записи.
+        // РћС‚РєСЂС‹РІР°РµРј С„Р°Р№Р» РґР»СЏ Р·Р°РїРёСЃРё.
         std::ofstream outputFile(
             outputPath,
             std::ios::binary);
@@ -281,14 +284,14 @@ bool ArchiveExtractor::extract(
         if (!outputFile)
         {
             errorMessage =
-                "Не удалось создать файл: " +
+                "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ С„Р°Р№Р»: " +
                 outputPath.string();
 
             archive_read_free(archive);
             return false;
         }
 
-        // Копируем содержимое файла из архива.
+        // РљРѕРїРёСЂСѓРµРј СЃРѕРґРµСЂР¶РёРјРѕРµ С„Р°Р№Р»Р° РёР· Р°СЂС…РёРІР°.
         const void* buffer = nullptr;
         size_t size = 0;
         la_int64_t offset = 0;
@@ -308,7 +311,7 @@ bool ArchiveExtractor::extract(
             if (readResult != ARCHIVE_OK)
             {
                 errorMessage =
-                    "Ошибка чтения файла из архива: " +
+                    "РћС€РёР±РєР° С‡С‚РµРЅРёСЏ С„Р°Р№Р»Р° РёР· Р°СЂС…РёРІР°: " +
                     entryNameString +
                     ". " +
                     archiveError(archive);
@@ -324,7 +327,7 @@ bool ArchiveExtractor::extract(
             if (!outputFile)
             {
                 errorMessage =
-                    "Ошибка записи файла: " +
+                    "РћС€РёР±РєР° Р·Р°РїРёСЃРё С„Р°Р№Р»Р°: " +
                     outputPath.string();
 
                 archive_read_free(archive);
@@ -337,7 +340,7 @@ bool ArchiveExtractor::extract(
         if (!outputFile)
         {
             errorMessage =
-                "Ошибка закрытия файла: " +
+                "РћС€РёР±РєР° Р·Р°РєСЂС‹С‚РёСЏ С„Р°Р№Р»Р°: " +
                 outputPath.string();
 
             archive_read_free(archive);
