@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1000</width>
-    <height>650</height>
+    <width>1125</width>
+    <height>709</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -113,6 +113,16 @@
            </column>
           </widget>
          </item>
+         <item>
+          <widget class="QPushButton" name="btnPreviewDocument">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>Просмотреть документ</string>
+           </property>
+          </widget>
+         </item>
         </layout>
        </widget>
       </item>
@@ -125,7 +135,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1000</width>
+     <width>1125</width>
      <height>21</height>
     </rect>
    </property>

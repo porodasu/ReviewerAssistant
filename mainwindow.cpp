@@ -2,6 +2,10 @@
 #include <QDir>
 #include "archive/ArchiveExtractor.h" // распоковщик Никиты
 #include <filesystem> // для пути
+#include <QDialog> // отдельное диалоговое окно
+#include <QPlainTextEdit> // отображает обычный текст
+#include <QVBoxLayout> // вертикальное расположение
+#include <QFile> // взаимодействие с файлами
 #include <QStandardPaths> // для нахождения стандартных путей
 #include <QMessageBox> // отображение
 #include <QStatusBar> // отобрадение чего-либо в нижнем углу (logs)
@@ -41,6 +45,64 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     ui.setupUi(this);
+
+
+    connect(ui.treeFiles, &QTreeWidget::currentItemChanged,
+        this, [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
+
+            // Если элемент не выбран
+            if (current == nullptr) {
+                ui.btnPreviewDocument->setEnabled(false);
+                return;
+            }
+
+            // Получаем путь выбранного элемента
+            QString path = current->data(0, Qt::UserRole).toString();
+            QFileInfo file(path);
+
+            // Проверяем, что это существующий файл .txt
+            bool canPreview = file.isFile() &&
+                file.suffix().compare("txt", Qt::CaseInsensitive) == 0;
+
+            ui.btnPreviewDocument->setEnabled(canPreview);
+        });
+
+    // нажатие
+    connect(ui.btnPreviewDocument, &QPushButton::clicked,
+        this, [this]() {
+
+            QTreeWidgetItem* item = ui.treeFiles->currentItem();
+
+            if (item == nullptr) {
+                return;
+            }
+
+            QString path = item->data(0, Qt::UserRole).toString();
+
+            QFile file(path);
+
+            if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QMessageBox::warning(this, "Ошибка",
+                    "Не удалось открыть файл");
+                return;
+            }
+
+            
+            QDialog dialog(this);
+            dialog.setWindowTitle("Просмотр: " + QFileInfo(path).fileName());
+            dialog.resize(700, 500);
+
+            QVBoxLayout layout(&dialog);
+
+            QPlainTextEdit textEdit;
+            textEdit.setReadOnly(true);
+            textEdit.setPlainText(QString::fromUtf8(file.readAll()));
+
+            layout.addWidget(&textEdit);
+
+            dialog.exec();
+        });
+
 
 
     // Выбор архива
