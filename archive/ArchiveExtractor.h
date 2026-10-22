@@ -1,14 +1,12 @@
-#pragma once
+﻿#pragma once
 
-#include <filesystem>
 #include <string>
+#include <filesystem>
 
 class ArchiveExtractor
 {
 public:
-    bool extract(
-        const std::filesystem::path& archivePath,
-        const std::filesystem::path& destination,
-        std::string& errorMessage
-    );
+    bool extract(const std::filesystem::path& archivePath,
+                 const std::filesystem::path& destPath,
+                 std::string& errorMessage);
 };
