@@ -18,13 +18,21 @@ std::wstring SafeConvertToWide(const char* str, UINT codePage, DWORD flags = 0) 
 }
 
 bool HasReparsePointInPath(const std::filesystem::path& basePath, const std::filesystem::path& targetPath) {
-    std::filesystem::path currentPath = basePath;
 
-    auto relPath = std::filesystem::relative(targetPath, basePath);
+    DWORD baseAttrs = GetFileAttributesW(basePath.c_str());
+    if (baseAttrs != INVALID_FILE_ATTRIBUTES && (baseAttrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        return true;
+    }
+
+    auto relPath = targetPath.lexically_relative(basePath);
     if (relPath.empty()) return false;
 
+    std::filesystem::path currentPath = basePath;
     for (const auto& part : relPath) {
-        if (part == "." || part == "..") continue;
+        if (part == ".") continue;
+
+
+        if (part == "..") return true;
 
         currentPath /= part;
 
@@ -61,14 +69,23 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
 
     while (true) {
         r = archive_read_next_header(a, &entry);
+
         if (r == ARCHIVE_EOF) break;
 
+        if (r == ARCHIVE_FATAL) {
+            errorMessage = "Фатальная ошибка чтения архива: " + std::string(archive_error_string(a));
+            success = false;
+            break;
+        }
+
+        if (r == ARCHIVE_WARN || r == ARCHIVE_FAILED) {
+            errorMessage = "Предупреждение при чтении заголовка: " + std::string(archive_error_string(a));
+            success = false;
+            archive_read_data_skip(a);
+            continue;
+        }
+
         if (r != ARCHIVE_OK) {
-            if (r == ARCHIVE_FATAL) {
-                errorMessage = archive_error_string(a);
-                success = false;
-                break;
-            }
             continue;
         }
 
@@ -166,21 +183,27 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
 
             if (n < 0) {
                 errorMessage = "Ошибка чтения данных из архива: " + std::string(archive_error_string(a));
-                success = false;
                 writeError = true;
             }
 
-            out.close(); 
+            out.close();
+            if (!out.good()) {
+                writeError = true;
+                if (n >= 0) {
+                    errorMessage = "Ошибка записи файла (возможно, диск заполнен): " + targetPath.string();
+                }
+            }
+
 
             if (writeError) {
-
+                success = false;
                 std::filesystem::remove(targetPath, ec);
                 archive_read_data_skip(a);
                 continue;
             }
         }
         else {
-            errorMessage = "Отклонен элемент архива неизвестного типа (возможно, символическая ссылка): " + targetPath.string();
+            errorMessage = "Отклонен элемент архива неизвестного типа: " + targetPath.string();
             success = false;
             archive_read_data_skip(a);
             continue;
