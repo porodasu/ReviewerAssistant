@@ -113,6 +113,20 @@ bool ArchiveExtractor::extract(
     archive_read_support_filter_all(archive);
     archive_read_support_format_all(archive);
 
+    // Для ZIP используем UTF-8 для имён без установленного
+    // флага UTF-8. Имена с установленным флагом libarchive
+    // продолжает обрабатывать согласно этому флагу.
+    if (archive_read_set_format_option(
+        archive, "zip", "hdrcharset", "UTF-8") != ARCHIVE_OK)
+    {
+        errorMessage =
+            "Не удалось настроить кодировку имён ZIP: " +
+            archiveError(archive);
+
+        archive_read_free(archive);
+        return false;
+    }
+
     // Открываем архив.
 
     if (archive_read_open_filename_w(
