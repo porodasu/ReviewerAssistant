@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "DocumentReader.h"
 #include <QDir>
 #include "archive/ArchiveExtractor.h" // распоковщик Никиты
 #include <filesystem> // для пути
@@ -60,14 +61,19 @@ MainWindow::MainWindow(QWidget *parent)
             QString path = current->data(0, Qt::UserRole).toString();
             QFileInfo file(path);
 
-            // Проверяем, что это существующий файл .txt
+            // Проверяем, что это существующий файл .docx
+            QString extension = file.suffix().toLower();
+
             bool canPreview = file.isFile() &&
-                file.suffix().compare("txt", Qt::CaseInsensitive) == 0;
+                (extension == "txt" ||
+                 extension == "docx" ||
+                 extension == "doc");
 
             ui.btnPreviewDocument->setEnabled(canPreview);
         });
 
     // нажатие
+
     connect(ui.btnPreviewDocument, &QPushButton::clicked,
         this, [this]() {
 
@@ -79,15 +85,32 @@ MainWindow::MainWindow(QWidget *parent)
 
             QString path = item->data(0, Qt::UserRole).toString();
 
-            QFile file(path);
+            QString text;
+            QString errorMessage;
 
-            if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QMessageBox::warning(this, "Ошибка",
-                    "Не удалось открыть файл");
+            // Чтение файла через DocumentReader
+
+            QString extension = QFileInfo(path).suffix().toLower();
+            bool success = false;
+
+            if (extension == "txt") {
+                success = DocumentReader::readTxt(path, text, errorMessage);
+            }
+            else if (extension == "docx") {
+                success = DocumentReader::readDocx(path, text, errorMessage);
+            }
+
+            else if (extension == "doc") {
+                success = DocumentReader::readDoc(path, text, errorMessage);
+            }
+
+            if (!success) {
+                QMessageBox::warning(this, "Ошибка", errorMessage);
                 return;
             }
 
-            
+
+            // Создаём окно просмотра
             QDialog dialog(this);
             dialog.setWindowTitle("Просмотр: " + QFileInfo(path).fileName());
             dialog.resize(700, 500);
@@ -96,12 +119,13 @@ MainWindow::MainWindow(QWidget *parent)
 
             QPlainTextEdit textEdit;
             textEdit.setReadOnly(true);
-            textEdit.setPlainText(QString::fromUtf8(file.readAll()));
+            textEdit.setPlainText(text);
 
             layout.addWidget(&textEdit);
 
             dialog.exec();
         });
+
 
 
 
