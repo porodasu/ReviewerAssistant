@@ -13,8 +13,6 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
     struct archive* a = archive_read_new();
     archive_read_support_format_all(a);
     archive_read_support_filter_all(a);
-
-    // ВАШЕ РЕШЕНИЕ: Указываем libarchive читать имена как CP866, если нет флага UTF-8
     archive_read_set_options(a, "zip:hdrcharset=CP866");
 
     int r = archive_read_open_filename_w(a, archivePath.wstring().c_str(), 10240);
@@ -45,8 +43,6 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
         std::filesystem::path entryPath;
         bool pathFound = false;
 
-        // Благодаря "hdrcharset=CP866" эта функция теперь правильно 
-        // конвертирует старые имена файлов в Unicode
         const wchar_t* path_w = archive_entry_pathname_w(entry);
 
         if (path_w && path_w[0] != L'\0') {
@@ -54,7 +50,6 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
             pathFound = true;
         }
         else {
-            // Резервный вариант, если имя вообще не удалось прочитать
             const char* raw_path = archive_entry_pathname(entry);
             if (raw_path && raw_path[0] != '\0') {
                 int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, raw_path, -1, NULL, 0);
@@ -76,7 +71,6 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
         }
 
         if (!pathFound || entryPath.empty() || entryPath == L".") {
-            // ВАЖНО: Сдвигаем курсор, чтобы не застрять на этом файле
             archive_read_data_skip(a);
             continue;
         }
@@ -98,7 +92,6 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
             if (!out.is_open()) {
                 errorMessage = "Не удалось создать файл: " + targetPath.string();
                 success = false;
-                // ВАЖНО: Сдвигаем курсор, если не смогли создать файл
                 archive_read_data_skip(a);
                 continue;
             }

@@ -1,4 +1,4 @@
-#include "ArchiveExtractor.h"
+ï»¿#include "ArchiveExtractor.h"
 
 #include <filesystem>
 #include <iostream>
@@ -24,13 +24,13 @@ int main()
 
     if (success)
     {
-        std::cout << "Òåñò ïðîø¸ë: àðõèâ ðàñïàêîâàí."
+        std::cout << "Ð¢ÐµÑÑ‚ Ð¿Ñ€Ð¾ÑˆÑ‘Ð»: Ð°Ñ€Ñ…Ð¸Ð² Ñ€Ð°ÑÐ¿Ð°ÐºÐ¾Ð²Ð°Ð½."
             << std::endl;
 
         return 0;
     }
 
-    std::cout << "Îøèáêà: "
+    std::cout << "ÐžÑˆÐ¸Ð±ÐºÐ°: "
         << errorMessage
         << std::endl;
 

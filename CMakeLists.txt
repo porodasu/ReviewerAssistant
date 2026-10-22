@@ -15,7 +15,6 @@ find_package(Qt${QT_VERSION_MAJOR}
 )
 
 find_package(LibArchive REQUIRED)
-# find_package(libzip CONFIG REQUIRED) - УДАЛЕНО
 
 qt_standard_project_setup()
 
@@ -39,7 +38,6 @@ add_executable(ArchiveExtractorTest
 target_link_libraries(ArchiveExtractorTest
     PRIVATE
         LibArchive::LibArchive
-        # libzip::zip - УДАЛЕНО
 )
 
 set_target_properties(${PROJECT_NAME}
@@ -53,5 +51,4 @@ target_link_libraries(${PROJECT_NAME}
         Qt::Gui
         Qt::Widgets
         LibArchive::LibArchive
-        # libzip::zip - УДАЛЕНО
 )
