@@ -4,10 +4,8 @@
 #include <fstream>
 #include <system_error>
 #include <string>
-#include <vector>
 #include <windows.h>
 
-// Вспомогательная функция для безопасной конвертации (исправляет проблему size - 1)
 std::wstring SafeConvertToWide(const char* str, UINT codePage, DWORD flags = 0) {
     if (!str || str[0] == '\0') return L"";
     int size = MultiByteToWideChar(codePage, flags, str, -1, NULL, 0);
@@ -15,15 +13,27 @@ std::wstring SafeConvertToWide(const char* str, UINT codePage, DWORD flags = 0) 
 
     std::wstring result(size, 0);
     MultiByteToWideChar(codePage, flags, str, -1, &result[0], size);
-    result.resize(size - 1); // Убираем нуль-терминатор в конце
+    result.resize(size - 1);
     return result;
 }
 
-// Проверка на символические ссылки (Reparse Points) в пути
-bool IsReparsePoint(const std::filesystem::path& path) {
-    DWORD attrs = GetFileAttributesW(path.c_str());
-    if (attrs == INVALID_FILE_ATTRIBUTES) return false;
-    return (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+bool HasReparsePointInPath(const std::filesystem::path& basePath, const std::filesystem::path& targetPath) {
+    std::filesystem::path currentPath = basePath;
+
+    auto relPath = std::filesystem::relative(targetPath, basePath);
+    if (relPath.empty()) return false;
+
+    for (const auto& part : relPath) {
+        if (part == "." || part == "..") continue;
+
+        currentPath /= part;
+
+        DWORD attrs = GetFileAttributesW(currentPath.c_str());
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
@@ -34,7 +44,6 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
     archive_read_support_format_all(a);
     archive_read_support_filter_all(a);
 
-    // Ваше решение для правильной кодировки
     archive_read_set_options(a, "zip:hdrcharset=CP866");
 
     int r = archive_read_open_filename_w(a, archivePath.wstring().c_str(), 10240);
@@ -48,7 +57,6 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
     bool success = true;
     std::error_code ec;
 
-    // Получаем абсолютный путь назначения (для защиты от Zip Slip)
     std::filesystem::path absDest = std::filesystem::absolute(destPath).lexically_normal();
 
     while (true) {
@@ -73,9 +81,7 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
         else {
             const char* raw_path = archive_entry_pathname(entry);
             wpath = SafeConvertToWide(raw_path, CP_UTF8, MB_ERR_INVALID_CHARS);
-            if (wpath.empty()) {
-                wpath = SafeConvertToWide(raw_path, CP_ACP);
-            }
+            if (wpath.empty()) wpath = SafeConvertToWide(raw_path, CP_ACP);
         }
 
         if (wpath.empty() || wpath == L".") {
@@ -87,8 +93,6 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
         std::filesystem::path targetPath = (destPath / entryPath).lexically_normal();
         std::filesystem::path absTarget = std::filesystem::absolute(targetPath).lexically_normal();
 
-        // 1. ЗАЩИТА ОТ ZIP SLIP (Path Traversal)
-        // Проверяем, что целевой путь начинается с пути назначения
         bool isSubPath = true;
         auto itDest = absDest.begin();
         auto itTarget = absTarget.begin();
@@ -106,28 +110,23 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
             continue;
         }
 
-        // 5. ЗАЩИТА ОТ REPARSE POINTS (Символических ссылок)
-        // Проверяем, не является ли родительская папка ссылкой
-        if (std::filesystem::exists(targetPath.parent_path())) {
-            if (IsReparsePoint(targetPath.parent_path())) {
-                errorMessage = "Ошибка безопасности: попытка записи через символическую ссылку.";
-                success = false;
-                archive_read_data_skip(a);
-                continue;
-            }
+        if (HasReparsePointInPath(absDest, absTarget)) {
+            errorMessage = "Ошибка безопасности: попытка записи через символическую ссылку.";
+            success = false;
+            archive_read_data_skip(a);
+            continue;
         }
 
         auto filetype = archive_entry_filetype(entry);
 
         if (filetype == AE_IFDIR) {
             std::filesystem::create_directories(targetPath, ec);
-            // 4. Проверка ошибок создания директории
             if (ec) {
                 errorMessage = "Ошибка создания папки: " + ec.message();
                 success = false;
             }
         }
-        else {
+        else if (filetype == AE_IFREG) {
             if (!targetPath.parent_path().empty()) {
                 std::filesystem::create_directories(targetPath.parent_path(), ec);
                 if (ec) {
@@ -138,16 +137,14 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
                 }
             }
 
-            // 2. ЗАЩИТА ОТ ПЕРЕЗАПИСИ СУЩЕСТВУЮЩИХ ФАЙЛОВ
             if (std::filesystem::exists(targetPath)) {
                 errorMessage = "Файл уже существует, пропущен: " + targetPath.string();
-                success = false; // Помечаем как false, чтобы пользователь знал, что не всё распаковалось
+                success = false;
                 archive_read_data_skip(a);
                 continue;
             }
 
             std::ofstream out(targetPath, std::ios::binary | std::ios::out);
-            // 4. Проверка открытия файла
             if (!out.is_open()) {
                 errorMessage = "Не удалось создать файл: " + targetPath.string();
                 success = false;
@@ -161,17 +158,32 @@ bool ArchiveExtractor::extract(const std::filesystem::path& archivePath,
 
             while ((n = archive_read_data(a, buff, sizeof(buff))) > 0) {
                 out.write(buff, n);
-                // 4. Проверка ошибок записи данных
                 if (!out.good()) {
                     writeError = true;
                     break;
                 }
             }
 
-            if (writeError) {
-                errorMessage = "Ошибка записи в файл: " + targetPath.string();
+            if (n < 0) {
+                errorMessage = "Ошибка чтения данных из архива: " + std::string(archive_error_string(a));
                 success = false;
+                writeError = true;
             }
+
+            out.close(); 
+
+            if (writeError) {
+
+                std::filesystem::remove(targetPath, ec);
+                archive_read_data_skip(a);
+                continue;
+            }
+        }
+        else {
+            errorMessage = "Отклонен элемент архива неизвестного типа (возможно, символическая ссылка): " + targetPath.string();
+            success = false;
+            archive_read_data_skip(a);
+            continue;
         }
     }
 
