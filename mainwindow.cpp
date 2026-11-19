@@ -1,9 +1,22 @@
 #include "mainwindow.h"
 #include "DocumentReader.h"
+#include "ReviewManager.h"
 #include <QDir>
+#include <QInputDialog>
+#include <QDate>
+#include <QMap>
+#include <QProcess> // позволяет запускать другие программы
+#include <QDebug>
+#include <QDateTime>
+#include <QSettings>
 #include "archive/ArchiveExtractor.h" // распоковщик Никиты
 #include <filesystem> // для пути
+#include <QSaveFile>
+#include <QLineEdit>
+#include <QFormLayout>
 #include <QDialog> // отдельное диалоговое окно
+#include <QDialogButtonBox>
+#include <QPushButton>
 #include <QPlainTextEdit> // отображает обычный текст
 #include <QVBoxLayout> // вертикальное расположение
 #include <QFile> // взаимодействие с файлами
@@ -28,6 +41,19 @@ void addFolderItems(QTreeWidgetItem* parent, const QString& path) // откры�
     );
 
     for (const QFileInfo& file : files) {
+
+        // Пропускаем резервные копии
+        if (file.isFile() &&
+            file.fileName().endsWith(".bak", Qt::CaseInsensitive)) {
+            continue;
+        }
+
+        // Пропускаем служебные файлы блокировки LibreOffice
+        if (file.isFile() &&
+            file.fileName().startsWith(".~lock.", Qt::CaseInsensitive)) {
+            continue;
+        }
+
         QTreeWidgetItem* item = new QTreeWidgetItem(parent);
 
         item->setText(0, file.fileName()); // хранение ФИО
@@ -42,23 +68,83 @@ void addFolderItems(QTreeWidgetItem* parent, const QString& path) // откры�
 }
 
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     ui.setupUi(this);
 
+    ui.btnPreviewDocument->setEnabled(false);
+    ui.btnEditRemarks->setEnabled(false);
+    ui.btnExtractArchive->setEnabled(false);
+    ui.btnCreateReview->setEnabled(false);
 
+    // Находим папку "Документы"
+    QString documents = QStandardPaths::writableLocation(
+        QStandardPaths::DocumentsLocation);
+
+    if (documents.isEmpty()) {
+        QMessageBox::critical(this, "Ошибка",
+            "Не удалось найти папку Документы");
+        return;
+    }
+
+    QDir dir(documents);
+
+    // Проверяем и создаём рабочий каталог
+    QString folder = "ReviewerAssistant/Участники";
+
+    if (!dir.mkpath(folder)) {
+        QMessageBox::critical(this, "Ошибка",
+            "Не удалось создать рабочий каталог");
+        return;
+    }
+
+    statusBar()->showMessage("Рабочий каталог готов");
+
+    /* Открываем папку участников  */
+
+    // Запоминаем путь к папке участников
+    participantsPath = dir.filePath(folder);
+    QDir participantsDir(participantsPath);
+
+    // Загружаем участников при запуске
+    refreshParticipants();
+
+    // Обновляем список по нажатию кнопки
+    connect(ui.btnRefreshParticipants, &QPushButton::clicked,
+        this, [this]() {
+            refreshParticipants();
+        });
+
+
+    // Реакция на выбор документа в дереве файлов
     connect(ui.treeFiles, &QTreeWidget::currentItemChanged,
         this, [this](QTreeWidgetItem* current, QTreeWidgetItem*) {
 
             // Если элемент не выбран
             if (current == nullptr) {
                 ui.btnPreviewDocument->setEnabled(false);
+                ui.btnEditRemarks->setEnabled(false);
+                ui.btnCreateReview->setEnabled(false);
                 return;
             }
 
             // Получаем путь выбранного элемента
             QString path = current->data(0, Qt::UserRole).toString();
+
+            // Разрешаем создание рецензии при выборе папки
+            QFileInfo selectedInfo(path);
+
+            ui.btnCreateReview->setEnabled(selectedInfo.isDir());
+
+            QFileInfo reviewFile(path);
+
+            bool canEditRemarks =
+                reviewFile.isFile() &&
+                reviewFile.suffix().compare("docx", Qt::CaseInsensitive) == 0 &&
+                reviewFile.fileName().contains("Рецензия", Qt::CaseInsensitive);
+
+            ui.btnEditRemarks->setEnabled(canEditRemarks);
             QFileInfo file(path);
 
             // Проверяем, что это существующий файл .docx
@@ -66,13 +152,275 @@ MainWindow::MainWindow(QWidget *parent)
 
             bool canPreview = file.isFile() &&
                 (extension == "txt" ||
-                 extension == "docx" ||
-                 extension == "doc");
+                    extension == "docx" ||
+                    extension == "doc");
 
             ui.btnPreviewDocument->setEnabled(canPreview);
         });
 
-    // нажатие
+    // Открываем окно с замечаниями рецензии
+    connect(ui.btnEditRemarks, &QPushButton::clicked,
+        this, [this]() {
+
+            QTreeWidgetItem* item = ui.treeFiles->currentItem();
+
+            if (item == nullptr) {
+                return;
+            }
+
+            QString path = item->data(0, Qt::UserRole).toString();
+
+            QString documentText;
+            QString errorMessage;
+
+            // Читаем содержимое DOCX
+            if (!ReviewManager::readDocxText(
+                path, documentText, errorMessage)) {
+
+                QMessageBox::warning(this, "Ошибка", errorMessage);
+                return;
+            }
+
+            // Запоминаем состояние исходного файла
+            QFileInfo openedFile(path);
+
+            QDateTime openedModified = openedFile.lastModified();
+            qint64 openedSize = openedFile.size();
+
+            // Разбиваем текст документа на строки
+            QStringList lines = documentText.split('\n');
+
+            int headingIndex = -1;
+
+            // Ищем раздел "Замечания"
+            for (int i = 0; i < lines.size(); ++i) {
+
+                if (lines[i].trimmed() == "Замечания") {
+                    headingIndex = i;
+                    break;
+                }
+            }
+
+            if (headingIndex == -1) {
+                QMessageBox::warning(this, "Ошибка",
+                    "Раздел «Замечания» не найден");
+                return;
+            }
+
+            // Получаем текст после заголовка
+            QString remarks = lines.mid(headingIndex + 1)
+                .join("\n").trimmed();
+
+            // Создаём диалоговое окно
+            QDialog dialog(this);
+            dialog.setWindowTitle("Замечания: " + QFileInfo(path).fileName());
+            dialog.resize(700, 500);
+
+            QVBoxLayout layout(&dialog);
+
+            QPlainTextEdit textEdit;
+            textEdit.setPlainText(remarks);
+            textEdit.setReadOnly(false);
+
+            layout.addWidget(&textEdit);
+
+            QDialogButtonBox buttons(QDialogButtonBox::Close);
+
+            QPushButton* saveButton = buttons.addButton(
+                "Сохранить",
+                QDialogButtonBox::ActionRole
+            );
+
+            saveButton->setEnabled(true);
+
+            // Сохраняем изменённые замечания
+            connect(saveButton, &QPushButton::clicked,
+                &dialog, [this, &dialog, &textEdit, path,
+                openedModified, openedSize]() {
+
+                    // Получаем замечания из текстового поля
+                    QStringList newRemarks = textEdit.toPlainText()
+                        .trimmed()
+                        .split('\n', Qt::KeepEmptyParts);
+
+                    // Убираем лишние пробелы по краям строк
+                    for (QString& remark : newRemarks) {
+                        remark = remark.trimmed();
+                    }
+
+
+
+                    // Не разрешаем пустые замечания
+                    for (const QString& remark : newRemarks) {
+                        if (remark.isEmpty()) {
+                            QMessageBox::warning(this, "Ошибка",
+                                "Замечания не должны быть пустыми.");
+                            return;
+                        }
+                    }
+
+                    // Проверяем исходный документ перед сохранением
+                    QFileInfo fileInfo(path);
+
+                    // Проверяем, не открыт ли документ в LibreOffice
+                    QString lockPath = QDir(fileInfo.absolutePath()).filePath(
+                        ".~lock." + fileInfo.fileName() + "#"
+                    );
+
+                    if (QFile::exists(lockPath)) {
+                        QMessageBox::warning(this, "Документ открыт",
+                            "Рецензия, возможно, открыта в LibreOffice.\n"
+                            "Закройте её в LibreOffice и повторите сохранение.");
+                        return;
+                    }
+
+                    // Проверяем, не изменился ли исходный документ
+                    if (!fileInfo.isFile() ||
+                        fileInfo.lastModified() != openedModified ||
+                        fileInfo.size() != openedSize) {
+
+                        QMessageBox::warning(this, "Файл изменён",
+                            "Документ был изменён после открытия редактора.\n"
+                            "Закройте окно замечаний и откройте рецензию заново.");
+
+                        return;
+                    }
+
+                    // Создаём резервную копию исходной рецензии
+                    QString timestamp = QDateTime::currentDateTime()
+                        .toString("yyyyMMdd_HHmmss_zzz");
+
+                    QString backupPath = QDir(fileInfo.absolutePath()).filePath(
+                        fileInfo.fileName() + "." + timestamp + ".bak"
+                    );
+
+                    // Проверяем создание резервной копии
+                    if (!QFile::copy(path, backupPath)) {
+                        QMessageBox::warning(this, "Ошибка",
+                            "Не удалось создать резервную копию рецензии.");
+                        return;
+                    }
+
+                    qDebug() << "Резервная копия создана:" << backupPath;
+
+                    // Создаём временный DOCX рядом с исходным файлом
+                    QString tempPath = QDir(fileInfo.absolutePath()).filePath(
+                        fileInfo.completeBaseName() + "_временный_" +
+                        timestamp + ".docx"
+                    );
+
+                    QString errorMessage;
+
+                    // Сначала формируем полностью готовую рецензию
+                    if (!ReviewManager::fillTemplate(
+                        path,
+                        tempPath,
+                        {},
+                        errorMessage,
+                        newRemarks)) {
+
+                        QFile::remove(tempPath);
+
+                        QMessageBox::warning(this, "Ошибка сохранения",
+                            errorMessage);
+                        return;
+                    }
+
+                    // Читаем готовый временный DOCX
+                    QFile tempFile(tempPath);
+
+                    if (!tempFile.open(QIODevice::ReadOnly)) {
+                        QFile::remove(tempPath);
+
+                        QMessageBox::warning(this, "Ошибка",
+                            "Не удалось прочитать временный документ.");
+                        return;
+                    }
+
+                    QByteArray data = tempFile.readAll();
+
+                    bool readSuccess = (data.size() == tempFile.size());
+                    tempFile.close();
+
+                    if (!readSuccess) {
+                        QFile::remove(tempPath);
+
+                        QMessageBox::warning(this, "Ошибка",
+                            "Не удалось полностью прочитать временный документ.");
+                        return;
+                    }
+
+                    // Безопасно записываем данные в исходную рецензию
+                    QSaveFile saveFile(path);
+
+                    if (!saveFile.open(QIODevice::WriteOnly)) {
+                        QFile::remove(tempPath);
+
+                        QMessageBox::warning(this, "Ошибка",
+                            "Не удалось открыть исходный файл для сохранения:\n" +
+                            saveFile.errorString());
+                        return;
+                    }
+
+                    if (saveFile.write(data) != data.size()) {
+                        saveFile.cancelWriting();
+                        QFile::remove(tempPath);
+
+                        QMessageBox::warning(this, "Ошибка",
+                            "Не удалось записать документ.");
+                        return;
+                    }
+
+                    // Завершаем запись и заменяем исходный файл
+                    if (!saveFile.commit()) {
+                        QFile::remove(tempPath);
+
+                        QMessageBox::warning(this, "Ошибка",
+                            "Не удалось завершить сохранение:\n" +
+                            saveFile.errorString());
+                        return;
+                    }
+
+                    // Удаляем больше не нужный временный файл
+                    QFile::remove(tempPath);
+
+                    QMessageBox::information(this, "Готово",
+                        "Изменения сохранены в исходную рецензию.\n"
+                        "Резервная копия создана:\n" + backupPath);
+
+                    dialog.accept();
+                });
+
+            QPushButton* openButton = buttons.addButton(
+                "Открыть весь документ в LibreOffice",
+                QDialogButtonBox::ActionRole
+            );
+
+            connect(openButton, &QPushButton::clicked,
+                &dialog, [this, path]() {
+
+                    QString libreOffice =
+                        "C:/Program Files/LibreOffice/program/soffice.exe";
+
+                    if (!QFileInfo::exists(libreOffice)) {
+                        QMessageBox::warning(this, "Ошибка",
+                            "LibreOffice не найден");
+                        return;
+                    }
+
+                    if (!QProcess::startDetached(libreOffice, QStringList{ path })) {
+                        QMessageBox::warning(this, "Ошибка",
+                            "Не удалось запустить LibreOffice");
+                    }
+                });
+
+            connect(&buttons, &QDialogButtonBox::rejected,
+                &dialog, &QDialog::reject);
+
+            layout.addWidget(&buttons);
+
+            dialog.exec();
+        });
 
     connect(ui.btnPreviewDocument, &QPushButton::clicked,
         this, [this]() {
@@ -190,45 +538,6 @@ MainWindow::MainWindow(QWidget *parent)
 
 
 
-    // Находим папку "Документы"
-    QString documents = QStandardPaths::writableLocation(
-        QStandardPaths::DocumentsLocation);
-
-    if (documents.isEmpty()) {
-        QMessageBox::critical(this, "Ошибка",
-            "Не удалось найти папку Документы");
-        return;
-    }
-
-    QDir dir(documents);
-
-    // Проверяем и создаём рабочий каталог
-    QString folder = "ReviewerAssistant/Участники";
-
-    if (!dir.mkpath(folder)) {
-        QMessageBox::critical(this, "Ошибка",
-            "Не удалось создать рабочий каталог");
-        return;
-    }
-
-    statusBar()->showMessage("Рабочий каталог готов");
-
-    /* Открываем папку участников  */
-
-    // Запоминаем путь к папке участников
-    participantsPath = dir.filePath(folder);
-    QDir participantsDir(participantsPath);
-
-    // Загружаем участников при запуске
-    refreshParticipants();
-
-    // Обновляем список по нажатию кнопки
-    connect(ui.btnRefreshParticipants, &QPushButton::clicked,
-        this, [this]() {
-            refreshParticipants();
-        });
-
-
     // При выборе участника показываем его файлы (через сигналы)
 
     connect(ui.treeParticipants, &QTreeWidget::itemClicked,
@@ -267,11 +576,272 @@ MainWindow::MainWindow(QWidget *parent)
         });
 
 
+    connect(ui.btnCreateReview, &QPushButton::clicked,
+        this, [this]() {
+
+            // Получаем выбранного студента и папку работы
+            QTreeWidgetItem* student =
+                ui.treeParticipants->currentItem();
+
+            QTreeWidgetItem* folder =
+                ui.treeFiles->currentItem();
+
+            if (student == nullptr || folder == nullptr) {
+                QMessageBox::warning(this, "Ошибка",
+                    "Выберите студента и папку работы.");
+                return;
+            }
+
+            QString studentName = student->text(0);
+
+            QString folderPath =
+                folder->data(0, Qt::UserRole).toString();
+
+            if (!QFileInfo(folderPath).isDir()) {
+                QMessageBox::warning(this, "Ошибка",
+                    "Необходимо выбрать папку работы.");
+                return;
+            }
+
+            // Временно выбираем номер лабораторной вручную
+            bool ok = false;
+
+            int labNumber = QInputDialog::getInt(
+                this,
+                "Номер лабораторной работы",
+                "Введите номер лабораторной работы:",
+                1, 1, 2, 1, &ok
+            );
+
+            if (!ok) {
+                return;
+            }
+
+            // Выбираем форму обращения к студенту
+            QStringList studentForms = {
+                "Студент",
+                "Студентка"
+            };
+
+            QString studentForm = QInputDialog::getItem(
+                this,
+                "Форма обращения",
+                "Выберите форму обращения:",
+                studentForms,
+                0,
+                false,
+                &ok
+            );
+
+            if (!ok) {
+                return;
+            }
+
+            // Разделяем ФИО на части
+            QStringList nameParts = studentName.simplified().split(
+                ' ', Qt::SkipEmptyParts
+            );
+
+            if (nameParts.size() != 3) {
+                QMessageBox::warning(this, "Ошибка",
+                    "ФИО студента должно содержать "
+                    "фамилию, имя и отчество.");
+                return;
+            }
+
+            // Формируем фамилию и инициалы
+            QString shortName =
+                nameParts[0] + " " +
+                nameParts[1].left(1) + "." +
+                nameParts[2].left(1) + ".";
+
+            // Определяем путь к рабочему шаблону
+            QString documents = QStandardPaths::writableLocation(
+                QStandardPaths::DocumentsLocation
+            );
+
+            QString templatePath = QDir(documents).filePath(
+                "ReviewerAssistant/Шаблоны/Рецензия_шаблон.docx"
+            );
+
+            if (!QFileInfo::exists(templatePath)) {
+                QMessageBox::warning(this, "Ошибка",
+                    "Шаблон рецензии не найден:\n" +
+                    templatePath);
+                return;
+            }
+
+            // Формируем имя будущей рецензии
+            QString fileName = QString(
+                "%1_Рецензия_ЛР%2.docx"
+            ).arg(shortName).arg(labNumber);
+
+            QString outputPath =
+                QDir(folderPath).filePath(fileName);
+
+            // Защита от перезаписи существующей рецензии
+            if (QFileInfo::exists(outputPath)) {
+                QMessageBox::warning(this, "Ошибка",
+                    "Рецензия уже существует:\n" +
+                    outputPath);
+                return;
+            }
+
+
+            // Окно для ввода дополнительных сведений
+            QDialog dataDialog(this);
+            dataDialog.setWindowTitle("Сведения о студенте");
+            dataDialog.setMinimumWidth(520);
+
+            QFormLayout form(&dataDialog);
+
+            QLineEdit specEdit(&dataDialog);
+            QLineEdit loginEdit(&dataDialog);
+            QLineEdit cityEdit(&dataDialog);
+
+            specEdit.setMinimumWidth(280);
+            loginEdit.setMinimumWidth(280);
+            cityEdit.setMinimumWidth(280);
+
+            // Файл с сохранёнными данными студентов
+            QString settingsPath = QDir(
+                QStandardPaths::writableLocation(
+                    QStandardPaths::DocumentsLocation
+                )
+            ).filePath("ReviewerAssistant/student_data.ini");
+
+            QSettings settings(settingsPath, QSettings::IniFormat);
+
+            // Выбираем данные конкретного студента
+            settings.beginGroup(studentName);
+
+            // Автоматически заполняем поля сохранёнными значениями
+            specEdit.setText(
+                settings.value("specialty", "").toString()
+            );
+
+            loginEdit.setText(
+                settings.value("login", "").toString()
+            );
+
+            cityEdit.setText(
+                settings.value("city", "").toString()
+            );
+
+            form.addRow("Специальность:", &specEdit);
+            form.addRow("Шифр студента:", &loginEdit);
+            form.addRow("Представительство:", &cityEdit);
+
+            QDialogButtonBox buttons(
+                QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+                &dataDialog
+            );
+
+            form.addRow(&buttons);
+
+            connect(&buttons, &QDialogButtonBox::accepted,
+                &dataDialog, &QDialog::accept);
+
+            connect(&buttons, &QDialogButtonBox::rejected,
+                &dataDialog, &QDialog::reject);
+
+            if (dataDialog.exec() != QDialog::Accepted) {
+                return;
+            }
+
+
+            // Значения для замены в DOCX
+            QMap<QString, QString> replacements;
+
+            replacements.insert(
+                "{GEN}",
+                studentForm == "Студентка" ? "ка" : ""
+            );
+
+            replacements.insert(
+                "{ID}", QString::number(labNumber)
+            );
+
+            replacements.insert(
+                "{DISCIPLINE}",
+                "Объектно-ориентированное программирование - " +
+                QString::number(labNumber)
+            );
+
+            replacements.insert("{FIO}", shortName);
+
+            replacements.insert(
+                "{DD.MM.YYYY}",
+                QDate::currentDate().toString("dd.MM.yyyy")
+            );
+
+            // Заполняем дополнительные сведения, если они введены
+            if (!specEdit.text().trimmed().isEmpty()) {
+                replacements.insert("{SPEC}", specEdit.text().trimmed());
+            }
+
+            if (!loginEdit.text().trimmed().isEmpty()) {
+                replacements.insert("{LOGIN}", loginEdit.text().trimmed());
+            }
+
+            if (!cityEdit.text().trimmed().isEmpty()) {
+                replacements.insert("{CITY}", cityEdit.text().trimmed());
+            }
+
+            // Создаём документ на основе шаблона
+            QString errorMessage;
+
+            if (!ReviewManager::fillTemplate(
+                templatePath,
+                outputPath,
+                replacements,
+                errorMessage)) {
+
+                QMessageBox::warning(this,
+                    "Ошибка создания рецензии",
+                    errorMessage);
+                return;
+            }
+
+            // Сохраняем сведения о студенте
+            settings.setValue("specialty", specEdit.text().trimmed());
+            settings.setValue("login", loginEdit.text().trimmed());
+            settings.setValue("city", cityEdit.text().trimmed());
+
+            settings.endGroup();
+            settings.sync();
+
+            if (settings.status() != QSettings::NoError) {
+                QMessageBox::warning(
+                    this,
+                    "Предупреждение",
+                    "Рецензия создана, но сведения о студенте "
+                    "не удалось сохранить."
+                );
+            }
+
+            // Очищаем старый список файлов выбранной папки
+            while (folder->childCount() > 0) {
+                delete folder->takeChild(0);
+            }
+
+            // Повторно читаем содержимое папки с диска
+            addFolderItems(folder, folderPath);
+
+            // Раскрываем папку, чтобы увидеть новую рецензию
+            folder->setExpanded(true);
+
+            QMessageBox::information(this, "Готово",
+                "Рецензия успешно создана:\n" +
+                outputPath);
+        });
+
 
 }
 
 MainWindow::~MainWindow()
-{}
+{
+}
 
 
 void MainWindow::refreshParticipants()

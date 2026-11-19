@@ -123,6 +123,26 @@
            </property>
           </widget>
          </item>
+         <item>
+          <widget class="QPushButton" name="btnEditRemarks">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>Редактировать замечания</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="btnCreateReview">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>Создать рецензию</string>
+           </property>
+          </widget>
+         </item>
         </layout>
        </widget>
       </item>

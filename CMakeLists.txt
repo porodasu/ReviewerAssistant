@@ -13,6 +13,7 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED
         Gui
         Widgets
         AxContainer
+        Xml
 )
 
 
@@ -28,6 +29,8 @@ set(PROJECT_SOURCES
 
     DocumentReader.h
     DocumentReader.cpp
+    ReviewManager.h
+    ReviewManager.cpp
 
     archive/ArchiveExtractor.h
     archive/ArchiveExtractor.cpp
@@ -55,7 +58,9 @@ target_link_libraries(${PROJECT_NAME}
         Qt::Core
         Qt::Gui
         Qt::Widgets
+        Qt::Xml
         Qt6::AxContainer
         LibArchive::LibArchive
+
 )
 
