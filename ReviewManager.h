@@ -1,8 +1,8 @@
 #pragma once
 
 #include <QString>
-#include <QMap>
 #include <QStringList>
+#include <QMap>
 
 class ReviewManager
 {
@@ -12,7 +12,8 @@ public:
         const QString& outputPath,
         const QMap<QString, QString>& replacements,
         QString& errorMessage,
-        const QStringList& newRemarks = {}
+        const QStringList& newRemarks = {},
+        bool updateFilledFields = false
     );
 
     static bool readDocxText(

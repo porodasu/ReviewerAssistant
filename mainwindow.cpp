@@ -5,6 +5,7 @@
 #include <QInputDialog>
 #include <QDate>
 #include <QMap>
+#include <QRegularExpression>
 #include <QProcess> // позволяет запускать другие программы
 #include <QDebug>
 #include <QDateTime>
@@ -13,6 +14,8 @@
 #include <filesystem> // для пути
 #include <QSaveFile>
 #include <QLineEdit>
+#include <QComboBox>
+#include <QSpinBox>
 #include <QFormLayout>
 #include <QDialog> // отдельное диалоговое окно
 #include <QDialogButtonBox>
@@ -576,15 +579,13 @@ MainWindow::MainWindow(QWidget* parent)
         });
 
 
+
     connect(ui.btnCreateReview, &QPushButton::clicked,
         this, [this]() {
 
-            // Получаем выбранного студента и папку работы
-            QTreeWidgetItem* student =
-                ui.treeParticipants->currentItem();
-
-            QTreeWidgetItem* folder =
-                ui.treeFiles->currentItem();
+            // Получаем выбранного студента и папку
+            QTreeWidgetItem* student = ui.treeParticipants->currentItem();
+            QTreeWidgetItem* folder = ui.treeFiles->currentItem();
 
             if (student == nullptr || folder == nullptr) {
                 QMessageBox::warning(this, "Ошибка",
@@ -593,9 +594,7 @@ MainWindow::MainWindow(QWidget* parent)
             }
 
             QString studentName = student->text(0);
-
-            QString folderPath =
-                folder->data(0, Qt::UserRole).toString();
+            QString folderPath = folder->data(0, Qt::UserRole).toString();
 
             if (!QFileInfo(folderPath).isDir()) {
                 QMessageBox::warning(this, "Ошибка",
@@ -603,41 +602,7 @@ MainWindow::MainWindow(QWidget* parent)
                 return;
             }
 
-            // Временно выбираем номер лабораторной вручную
-            bool ok = false;
-
-            int labNumber = QInputDialog::getInt(
-                this,
-                "Номер лабораторной работы",
-                "Введите номер лабораторной работы:",
-                1, 1, 2, 1, &ok
-            );
-
-            if (!ok) {
-                return;
-            }
-
-            // Выбираем форму обращения к студенту
-            QStringList studentForms = {
-                "Студент",
-                "Студентка"
-            };
-
-            QString studentForm = QInputDialog::getItem(
-                this,
-                "Форма обращения",
-                "Выберите форму обращения:",
-                studentForms,
-                0,
-                false,
-                &ok
-            );
-
-            if (!ok) {
-                return;
-            }
-
-            // Разделяем ФИО на части
+            // Разделяем ФИО
             QStringList nameParts = studentName.simplified().split(
                 ' ', Qt::SkipEmptyParts
             );
@@ -655,83 +620,111 @@ MainWindow::MainWindow(QWidget* parent)
                 nameParts[1].left(1) + "." +
                 nameParts[2].left(1) + ".";
 
-            // Определяем путь к рабочему шаблону
+            // Путь к рабочей папке
             QString documents = QStandardPaths::writableLocation(
                 QStandardPaths::DocumentsLocation
             );
 
-            QString templatePath = QDir(documents).filePath(
-                "ReviewerAssistant/Шаблоны/Рецензия_шаблон.docx"
+            QDir workDir(QDir(documents).filePath("ReviewerAssistant"));
+
+            // Путь к шаблону
+            QString templatePath = workDir.filePath(
+                "Шаблоны/Рецензия_шаблон.docx"
             );
 
             if (!QFileInfo::exists(templatePath)) {
                 QMessageBox::warning(this, "Ошибка",
-                    "Шаблон рецензии не найден:\n" +
-                    templatePath);
+                    "Шаблон рецензии не найден:\n" + templatePath);
                 return;
             }
 
-            // Формируем имя будущей рецензии
-            QString fileName = QString(
-                "%1_Рецензия_ЛР%2.docx"
-            ).arg(shortName).arg(labNumber);
+            // Загружаем сохранённые сведения о студенте
+            QString settingsPath = workDir.filePath("student_data.ini");
 
-            QString outputPath =
-                QDir(folderPath).filePath(fileName);
+            QSettings settings(settingsPath, QSettings::IniFormat);
+            settings.beginGroup(studentName);
 
-            // Защита от перезаписи существующей рецензии
-            if (QFileInfo::exists(outputPath)) {
-                QMessageBox::warning(this, "Ошибка",
-                    "Рецензия уже существует:\n" +
-                    outputPath);
-                return;
-            }
+            QString savedSpec = settings.value(
+                "specialty", ""
+            ).toString();
 
+            QString savedLogin = settings.value(
+                "login", ""
+            ).toString();
 
-            // Окно для ввода дополнительных сведений
+            QString savedCity = settings.value(
+                "city", ""
+            ).toString();
+
+            QString savedForm = settings.value(
+                "studentForm", "Студент"
+            ).toString();
+
+            settings.endGroup();
+
+            // Создаём одно окно со всеми параметрами
             QDialog dataDialog(this);
-            dataDialog.setWindowTitle("Сведения о студенте");
+            dataDialog.setWindowTitle("Создание рецензии");
             dataDialog.setMinimumWidth(520);
 
             QFormLayout form(&dataDialog);
 
+            // Номер лабораторной работы
+            QSpinBox labEdit(&dataDialog);
+            labEdit.setRange(1, 2);
+            labEdit.setValue(1);
+
+            // Получаем название выбранной папки
+            QString folderName = QFileInfo(folderPath).fileName();
+
+            // Проверяем формат: номер ЛР + номер попытки
+            QRegularExpression pattern("^([12])([1-9][0-9]*)$");
+            QRegularExpressionMatch match = pattern.match(folderName);
+
+            if (match.hasMatch()) {
+
+                // Первая цифра — номер лабораторной
+                int detectedLab = match.captured(1).toInt();
+
+                labEdit.setValue(detectedLab);
+
+                // Запрещаем менять определённый номер вручную
+                labEdit.setEnabled(false);
+            }
+
+            // Форма обращения
+            QComboBox studentFormEdit(&dataDialog);
+            studentFormEdit.addItems({
+                "Студент",
+                "Студентка"
+                });
+
+            int formIndex = studentFormEdit.findText(savedForm);
+            if (formIndex >= 0) {
+                studentFormEdit.setCurrentIndex(formIndex);
+            }
+
+            // Дополнительные сведения
             QLineEdit specEdit(&dataDialog);
             QLineEdit loginEdit(&dataDialog);
             QLineEdit cityEdit(&dataDialog);
+
+            specEdit.setText(savedSpec);
+            loginEdit.setText(savedLogin);
+            cityEdit.setText(savedCity);
 
             specEdit.setMinimumWidth(280);
             loginEdit.setMinimumWidth(280);
             cityEdit.setMinimumWidth(280);
 
-            // Файл с сохранёнными данными студентов
-            QString settingsPath = QDir(
-                QStandardPaths::writableLocation(
-                    QStandardPaths::DocumentsLocation
-                )
-            ).filePath("ReviewerAssistant/student_data.ini");
-
-            QSettings settings(settingsPath, QSettings::IniFormat);
-
-            // Выбираем данные конкретного студента
-            settings.beginGroup(studentName);
-
-            // Автоматически заполняем поля сохранёнными значениями
-            specEdit.setText(
-                settings.value("specialty", "").toString()
-            );
-
-            loginEdit.setText(
-                settings.value("login", "").toString()
-            );
-
-            cityEdit.setText(
-                settings.value("city", "").toString()
-            );
-
+            // Добавляем элементы в форму
+            form.addRow("Номер лабораторной:", &labEdit);
+            form.addRow("Форма обращения:", &studentFormEdit);
             form.addRow("Специальность:", &specEdit);
             form.addRow("Шифр студента:", &loginEdit);
             form.addRow("Представительство:", &cityEdit);
 
+            // Кнопки подтверждения и отмены
             QDialogButtonBox buttons(
                 QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
                 &dataDialog
@@ -745,18 +738,74 @@ MainWindow::MainWindow(QWidget* parent)
             connect(&buttons, &QDialogButtonBox::rejected,
                 &dataDialog, &QDialog::reject);
 
+            // Если пользователь нажал Cancel
             if (dataDialog.exec() != QDialog::Accepted) {
                 return;
             }
 
+            // Получаем значения из окна
+            int labNumber = labEdit.value();
+            QString studentForm = studentFormEdit.currentText();
 
-            // Значения для замены в DOCX
+            // Формируем имя рецензии
+            QString fileName = QString(
+                "%1_Рецензия_ЛР%2.docx"
+            ).arg(shortName).arg(labNumber);
+
+            QString outputPath = QDir(folderPath).filePath(fileName);
+
+            // Не перезаписываем существующий документ
+            if (QFileInfo::exists(outputPath)) {
+                QMessageBox::warning(this, "Ошибка",
+                    "Рецензия уже существует:\n" + outputPath);
+                return;
+            }
+
+            // Ищем рецензию из предыдущих попыток
+            QString previousReviewPath;
+
+            if (match.hasMatch()) {
+
+                // Номер текущей попытки
+                int currentAttempt = match.captured(2).toInt();
+
+                // Папка студента
+                QDir studentDir = QFileInfo(folderPath).dir();
+
+                // Проверяем предыдущие попытки от новой к старой
+                for (int attempt = currentAttempt - 1; attempt >= 1; --attempt) {
+
+                    QString previousFolderName =
+                        QString("%1%2").arg(labNumber).arg(attempt);
+
+                    QString previousFolderPath =
+                        studentDir.filePath(previousFolderName);
+
+                    QString candidatePath =
+                        QDir(previousFolderPath).filePath(fileName);
+
+                    if (QFileInfo(candidatePath).isFile()) {
+                        previousReviewPath = candidatePath;
+                        break;
+                    }
+                }
+            }
+
+            // Временная проверка поиска
+            if (!previousReviewPath.isEmpty()) {
+                QMessageBox::information(this,
+                    "Предыдущая рецензия найдена",
+                    previousReviewPath);
+            }
+            else {
+                QMessageBox::information(this,
+                    "Предыдущая рецензия",
+                    "Предыдущая рецензия не найдена. "
+                    "Будет использоваться общий шаблон.");
+            }
+
+            // Заполнители шаблона
             QMap<QString, QString> replacements;
-
-            replacements.insert(
-                "{GEN}",
-                studentForm == "Студентка" ? "ка" : ""
-            );
 
             replacements.insert(
                 "{ID}", QString::number(labNumber)
@@ -771,70 +820,114 @@ MainWindow::MainWindow(QWidget* parent)
             replacements.insert("{FIO}", shortName);
 
             replacements.insert(
+                "{GEN}",
+                studentForm == "Студентка" ? "ка" : ""
+            );
+
+            replacements.insert(
                 "{DD.MM.YYYY}",
                 QDate::currentDate().toString("dd.MM.yyyy")
             );
 
-            // Заполняем дополнительные сведения, если они введены
+            // Дополнительные сведения
             if (!specEdit.text().trimmed().isEmpty()) {
-                replacements.insert("{SPEC}", specEdit.text().trimmed());
+                replacements.insert(
+                    "{SPEC}", specEdit.text().trimmed()
+                );
             }
 
             if (!loginEdit.text().trimmed().isEmpty()) {
-                replacements.insert("{LOGIN}", loginEdit.text().trimmed());
+                replacements.insert(
+                    "{LOGIN}", loginEdit.text().trimmed()
+                );
             }
 
             if (!cityEdit.text().trimmed().isEmpty()) {
-                replacements.insert("{CITY}", cityEdit.text().trimmed());
+                replacements.insert(
+                    "{CITY}", cityEdit.text().trimmed()
+                );
             }
 
-            // Создаём документ на основе шаблона
+            // Создаём DOCX
+
+
             QString errorMessage;
+            bool created = false;
 
-            if (!ReviewManager::fillTemplate(
-                templatePath,
-                outputPath,
-                replacements,
-                errorMessage)) {
+            if (!previousReviewPath.isEmpty()) {
 
-                QMessageBox::warning(this,
+                // Новая попытка: используем предыдущую рецензию
+                // и обновляем известные реквизиты.
+                created = ReviewManager::fillTemplate(
+                    previousReviewPath,
+                    outputPath,
+                    replacements,
+                    errorMessage,
+                    {},
+                    true
+                );
+            }
+            else {
+
+                // Первая попытка: используем общий шаблон.
+                created = ReviewManager::fillTemplate(
+                    templatePath,
+                    outputPath,
+                    replacements,
+                    errorMessage
+                );
+            }
+
+            // Проверяем успешность создания
+            if (!created) {
+                QMessageBox::warning(
+                    this,
                     "Ошибка создания рецензии",
-                    errorMessage);
+                    errorMessage
+                );
                 return;
             }
 
-            // Сохраняем сведения о студенте
-            settings.setValue("specialty", specEdit.text().trimmed());
-            settings.setValue("login", loginEdit.text().trimmed());
-            settings.setValue("city", cityEdit.text().trimmed());
+
+            // Сохраняем данные студента после успешного создания
+            settings.beginGroup(studentName);
+
+            settings.setValue(
+                "specialty", specEdit.text().trimmed()
+            );
+
+            settings.setValue(
+                "login", loginEdit.text().trimmed()
+            );
+
+            settings.setValue(
+                "city", cityEdit.text().trimmed()
+            );
+
+            settings.setValue("studentForm", studentForm);
 
             settings.endGroup();
             settings.sync();
 
             if (settings.status() != QSettings::NoError) {
-                QMessageBox::warning(
-                    this,
+                QMessageBox::warning(this,
                     "Предупреждение",
                     "Рецензия создана, но сведения о студенте "
-                    "не удалось сохранить."
-                );
+                    "не удалось сохранить.");
             }
 
-            // Очищаем старый список файлов выбранной папки
+            // Обновляем дерево файлов выбранной папки
             while (folder->childCount() > 0) {
                 delete folder->takeChild(0);
             }
 
-            // Повторно читаем содержимое папки с диска
             addFolderItems(folder, folderPath);
-
-            // Раскрываем папку, чтобы увидеть новую рецензию
             folder->setExpanded(true);
 
             QMessageBox::information(this, "Готово",
-                "Рецензия успешно создана:\n" +
-                outputPath);
+                "Рецензия успешно создана:\n" + outputPath);
         });
+
 
 
 }

@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QStringList>
 #include <QList>
+#include <QRegularExpression>
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -78,6 +79,265 @@ bool replacePlaceholder(QDomDocument& document,
     }
 
     return replaced;
+}
+
+
+// Возвращает текст одного абзаца, объединяя элементы w:t.
+static QString paragraphText(const QDomNode& paragraph)
+{
+    QString result;
+    QDomNodeList fragments = paragraph.toElement().elementsByTagName("w:t");
+    for (int i = 0; i < fragments.count(); ++i)
+        result += fragments.at(i).toElement().text();
+    return result;
+}
+
+// Меняет только указанный диапазон текста абзаца.
+// Остальные узлы XML (в том числе оформление) остаются на месте.
+static bool replaceTextRange(QDomNode paragraph, int start, int length,
+    const QString& newText)
+{
+    if (start < 0 || length <= 0)
+        return false;
+
+    QDomNodeList fragments = paragraph.toElement().elementsByTagName("w:t");
+    int position = 0;
+    bool inserted = false;
+    const int end = start + length;
+
+    for (int i = 0; i < fragments.count(); ++i) {
+        QDomElement fragmentElement = fragments.at(i).toElement();
+        const QString original = fragmentElement.text();
+        const int fragmentStart = position;
+        const int fragmentEnd = position + original.size();
+        position = fragmentEnd;
+
+        const int left = qMax(start, fragmentStart);
+        const int right = qMin(end, fragmentEnd);
+        if (left >= right)
+            continue;
+
+        QString updated = original.left(left - fragmentStart);
+        if (!inserted) {
+            updated += newText;
+            inserted = true;
+        }
+        updated += original.mid(right - fragmentStart);
+
+        QDomNode textNode = fragmentElement.firstChild();
+        if (textNode.isNull())
+            fragmentElement.appendChild(fragmentElement.ownerDocument().createTextNode(updated));
+        else
+            textNode.setNodeValue(updated);
+
+        // Не даём Word/LibreOffice схлопнуть значимые пробелы.
+        if (updated.startsWith(' ') || updated.endsWith(' '))
+            fragmentElement.setAttribute("xml:space", "preserve");
+    }
+
+    return inserted;
+}
+
+// Ищем и меняем поле по подписи, только в шапке рецензии.
+// stopLabel нужен для случая «специальность ... шифр ...».
+static bool replaceFieldByLabel(QDomDocument& document,
+    const QString& label, const QString& stopLabel,
+    const QString& newValue, QString& errorMessage)
+{
+    QDomNode found;
+    int valueStart = -1;
+    int valueLength = 0;
+    int matches = 0;
+
+    QDomNodeList paragraphs = document.elementsByTagName("w:p");
+    for (int i = 0; i < paragraphs.count(); ++i) {
+        QDomNode paragraph = paragraphs.at(i);
+        QString text = paragraphText(paragraph);
+
+        // Замечания не должны использоваться для поиска реквизитов.
+        if (text.trimmed().compare("Замечания", Qt::CaseInsensitive) == 0)
+            break;
+
+        int labelPos = text.indexOf(label, 0, Qt::CaseInsensitive);
+        if (labelPos < 0)
+            continue;
+
+        int start = labelPos + label.length();
+        while (start < text.size() && text.at(start).isSpace())
+            ++start;
+
+        int end = text.size();
+        if (!stopLabel.isEmpty()) {
+            int stop = text.indexOf(stopLabel, start, Qt::CaseInsensitive);
+            if (stop >= 0)
+                end = stop;
+        }
+        while (end > start && text.at(end - 1).isSpace())
+            --end;
+
+        if (start >= end) {
+            errorMessage = "Поле «" + label + "» пустое или имеет неожиданный формат";
+            return false;
+        }
+
+        ++matches;
+        found = paragraph;
+        valueStart = start;
+        valueLength = end - start;
+    }
+
+    if (matches != 1) {
+        errorMessage = "Не удалось однозначно найти поле «" + label
+            + "» в предыдущей рецензии";
+        return false;
+    }
+    if (!replaceTextRange(found, valueStart, valueLength, newValue)) {
+        errorMessage = "Не удалось обновить поле «" + label + "»";
+        return false;
+    }
+    return true;
+}
+
+// Обновляет дату в строке «Рецензент ...» и не трогает другие даты.
+static bool replaceReviewDate(QDomDocument& document,
+    const QString& newDate, QString& errorMessage)
+{
+    const QRegularExpression datePattern(R"(\b\d{2}\.\d{2}\.\d{4}\b)");
+    QDomNode found;
+    int start = -1;
+    int length = 0;
+    int matches = 0;
+
+    QDomNodeList paragraphs = document.elementsByTagName("w:p");
+    for (int i = 0; i < paragraphs.count(); ++i) {
+        QDomNode paragraph = paragraphs.at(i);
+        const QString text = paragraphText(paragraph);
+        if (text.trimmed() == "Замечания")
+            break;
+        if (!text.contains("Рецензент", Qt::CaseInsensitive))
+            continue;
+
+        QRegularExpressionMatch match = datePattern.match(text);
+        if (!match.hasMatch())
+            continue;
+        ++matches;
+        found = paragraph;
+        start = match.capturedStart();
+        length = match.capturedLength();
+    }
+
+    if (matches != 1) {
+        errorMessage = "Не удалось однозначно определить дату рецензента";
+        return false;
+    }
+    if (!replaceTextRange(found, start, length, newDate)) {
+        errorMessage = "Не удалось обновить дату рецензента";
+        return false;
+    }
+    return true;
+}
+
+// В старом шаблоне {GEN} подставляется после слова «студент»:
+// пустая строка => «студент», «ка» => «студентка».
+static bool replaceStudentForm(QDomDocument& document,
+    const QString& genValue, QString& errorMessage)
+{
+    const QString normalized = genValue.trimmed().toLower();
+    QString newForm;
+    if (normalized.isEmpty() || normalized == "студент")
+        newForm = "студент";
+    else if (normalized == "ка" || normalized == "студентка")
+        newForm = "студентка";
+    else {
+        errorMessage = "Неизвестная форма обращения к студенту: " + genValue;
+        return false;
+    }
+
+    const QRegularExpression formPattern(R"((^|\s)(студент(?:ка)?)(?=\s|$))",
+        QRegularExpression::CaseInsensitiveOption);
+    QDomNode found;
+    int start = -1;
+    int length = 0;
+    int matches = 0;
+
+    QDomNodeList paragraphs = document.elementsByTagName("w:p");
+    for (int i = 0; i < paragraphs.count(); ++i) {
+        QDomNode paragraph = paragraphs.at(i);
+        const QString text = paragraphText(paragraph);
+        if (text.trimmed() == "Замечания")
+            break;
+        if (!text.contains("ФДО ТУСУР", Qt::CaseInsensitive))
+            continue;
+        QRegularExpressionMatch match = formPattern.match(text);
+        if (!match.hasMatch())
+            continue;
+        ++matches;
+        found = paragraph;
+        start = match.capturedStart(2);
+        length = match.capturedLength(2);
+    }
+
+    if (matches != 1) {
+        errorMessage = "Не удалось однозначно найти форму обращения в рецензии";
+        return false;
+    }
+    if (!replaceTextRange(found, start, length, newForm)) {
+        errorMessage = "Не удалось изменить форму обращения";
+        return false;
+    }
+    return true;
+}
+
+// Обновление только известных полей уже заполненного документа.
+// Замечания, оценка и произвольные правки преподавателя не меняются.
+static bool updatePreviousReviewXml(QDomDocument& document,
+    const QMap<QString, QString>& replacements, QString& errorMessage)
+{
+    for (const QString& key : { QString("{DD.MM.YYYY}"), QString("{SPEC}"),
+                               QString("{LOGIN}"), QString("{CITY}"), QString("{GEN}") }) {
+        if (!replacements.contains(key))
+            continue;
+
+        const QString value = replacements.value(key).trimmed();
+        // Для формы обращения пустое значение значит «студент».
+        if (value.isEmpty() && key != "{GEN}")
+            continue;
+
+        // Если заполнитель сохранился, заменяем его напрямую.
+        // В данном шаблоне {GEN} — окончание после слова «студент».
+        QString placeholderValue = replacements.value(key);
+        if (key == "{GEN}") {
+            const QString lower = value.toLower();
+            if (lower == "студент")
+                placeholderValue.clear();
+            else if (lower == "студентка")
+                placeholderValue = "ка";
+        }
+        if (replacePlaceholder(document, key, placeholderValue))
+            continue;
+
+        if (key == "{DD.MM.YYYY}") {
+            if (!replaceReviewDate(document, value, errorMessage))
+                return false;
+        }
+        else if (key == "{SPEC}") {
+            if (!replaceFieldByLabel(document, "специальность", "шифр", value, errorMessage))
+                return false;
+        }
+        else if (key == "{LOGIN}") {
+            if (!replaceFieldByLabel(document, "шифр", QString(), value, errorMessage))
+                return false;
+        }
+        else if (key == "{CITY}") {
+            if (!replaceFieldByLabel(document, "представительство", QString(), value, errorMessage))
+                return false;
+        }
+        else if (key == "{GEN}") {
+            if (!replaceStudentForm(document, replacements.value(key), errorMessage))
+                return false;
+        }
+    }
+    return true;
 }
 
 // Работа с замечаниями
@@ -355,7 +615,8 @@ bool ReviewManager::fillTemplate(
     const QString& outputPath,
     const QMap<QString, QString>& replacements,
     QString& errorMessage,
-    const QStringList& newRemarks)
+    const QStringList& newRemarks,
+    bool updateFilledFields)
 {
     errorMessage.clear();
 
@@ -462,15 +723,23 @@ bool ReviewManager::fillTemplate(
                 return false;
             }
 
-            // Заменяем заполнители
-            for (auto it = replacements.cbegin();
-                it != replacements.cend(); ++it) {
-
-                if (!replacePlaceholder(
-                    document, it.key(), it.value())) {
-                    errorMessage = "Не найден заполнитель: " + it.key();
+            // Для новой рецензии заменяем заполнители, для копии предыдущей
+            // обновляем поля по их подписям в шапке документа.
+            if (updateFilledFields) {
+                if (!updatePreviousReviewXml(document, replacements, errorMessage)) {
                     cleanup(true);
                     return false;
+                }
+            }
+            else {
+                for (auto it = replacements.cbegin();
+                    it != replacements.cend(); ++it) {
+
+                    if (!replacePlaceholder(document, it.key(), it.value())) {
+                        errorMessage = "Не найден заполнитель: " + it.key();
+                        cleanup(true);
+                        return false;
+                    }
                 }
             }
 
