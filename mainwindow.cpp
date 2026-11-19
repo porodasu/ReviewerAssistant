@@ -178,7 +178,7 @@ MainWindow::MainWindow(QWidget* parent)
 
             // Читаем содержимое DOCX
             if (!ReviewManager::readDocxText(
-                path, documentText, errorMessage)) {
+                path, documentText, errorMessage, true)) {
 
                 QMessageBox::warning(this, "Ошибка", errorMessage);
                 return;
@@ -241,26 +241,44 @@ MainWindow::MainWindow(QWidget* parent)
                 &dialog, [this, &dialog, &textEdit, path,
                 openedModified, openedSize]() {
 
-                    // Получаем замечания из текстового поля
-                    QStringList newRemarks = textEdit.toPlainText()
-                        .trimmed()
-                        .split('\n', Qt::KeepEmptyParts);
 
-                    // Убираем лишние пробелы по краям строк
-                    for (QString& remark : newRemarks) {
-                        remark = remark.trimmed();
+                    QString input = textEdit.toPlainText().trimmed();
+
+                    QStringList newRemarks;
+
+                    // Если пользователь оставил хотя бы одно замечание
+                    if (!input.isEmpty()) {
+
+                        newRemarks = input.split('\n', Qt::KeepEmptyParts);
+
+                        for (QString& remark : newRemarks) {
+
+                            remark = remark.trimmed();
+
+                            if (remark.isEmpty()) {
+                                QMessageBox::warning(this, "Ошибка",
+                                    "Между замечаниями не должно быть пустых строк.");
+                                return;
+                            }
+                        }
                     }
+                    else {
 
+                        // Подтверждение удаления всех замечаний
+                        QMessageBox::StandardButton answer =
+                            QMessageBox::question(
+                                this,
+                                "Удаление замечаний",
+                                "Вы действительно хотите удалить все замечания?",
+                                QMessageBox::Yes | QMessageBox::No,
+                                QMessageBox::No
+                            );
 
-
-                    // Не разрешаем пустые замечания
-                    for (const QString& remark : newRemarks) {
-                        if (remark.isEmpty()) {
-                            QMessageBox::warning(this, "Ошибка",
-                                "Замечания не должны быть пустыми.");
+                        if (answer != QMessageBox::Yes) {
                             return;
                         }
                     }
+
 
                     // Проверяем исходный документ перед сохранением
                     QFileInfo fileInfo(path);
@@ -320,7 +338,9 @@ MainWindow::MainWindow(QWidget* parent)
                         tempPath,
                         {},
                         errorMessage,
-                        newRemarks)) {
+                        newRemarks,
+                        false,
+                        true)) {
 
                         QFile::remove(tempPath);
 

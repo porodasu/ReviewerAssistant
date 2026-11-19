@@ -13,12 +13,14 @@ public:
         const QMap<QString, QString>& replacements,
         QString& errorMessage,
         const QStringList& newRemarks = {},
-        bool updateFilledFields = false
+        bool updateFilledFields = false,
+        bool editRemarks = false
     );
 
     static bool readDocxText(
         const QString& path,
         QString& text,
-        QString& errorMessage
+        QString& errorMessage,
+        bool remarksOnly = false
     );
 };

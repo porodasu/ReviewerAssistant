@@ -8,6 +8,7 @@
 #include <QStringList>
 #include <QList>
 #include <QRegularExpression>
+#include <QStandardPaths>
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -91,6 +92,80 @@ static QString paragraphText(const QDomNode& paragraph)
         result += fragments.at(i).toElement().text();
     return result;
 }
+
+
+static bool isNumberedRemark(const QDomNode& node)
+{
+    if (!node.isElement() || node.nodeName() != "w:p")
+        return false;
+
+    QDomElement properties =
+        node.toElement().firstChildElement("w:pPr");
+
+    if (properties.isNull())
+        return false;
+
+    QDomElement numbering =
+        properties.firstChildElement("w:numPr");
+
+    if (numbering.isNull())
+        return false;
+
+    QDomElement numId =
+        numbering.firstChildElement("w:numId");
+
+    // Номер 0 означает отсутствие нумерации
+    if (!numId.isNull() &&
+        numId.attribute("w:val") == "0") {
+        return false;
+    }
+
+    return true;
+}
+
+// Получаем только последовательные пункты списка
+// непосредственно после заголовка «Замечания».
+static QList<QDomNode> collectRemarkParagraphs(
+    const QDomNode& heading)
+{
+    QList<QDomNode> remarks;
+    bool started = false;
+
+    QDomNode node = heading.nextSibling();
+
+    while (!node.isNull()) {
+
+        if (!node.isElement()) {
+            node = node.nextSibling();
+            continue;
+        }
+
+        if (node.nodeName() != "w:p")
+            break;
+
+        QString text = paragraphText(node).trimmed();
+
+        if (text.isEmpty()) {
+            if (started)
+                break;
+
+            node = node.nextSibling();
+            continue;
+        }
+
+        // Обычный текст означает конец списка
+        if (!isNumberedRemark(node))
+            break;
+
+        remarks.append(node);
+        started = true;
+
+        node = node.nextSibling();
+    }
+
+    return remarks;
+}
+
 
 // Меняет только указанный диапазон текста абзаца.
 // Остальные узлы XML (в том числе оформление) остаются на месте.
@@ -340,16 +415,123 @@ static bool updatePreviousReviewXml(QDomDocument& document,
     return true;
 }
 
+
+static QDomNode loadRemarkSample(
+    QDomDocument& targetDocument,
+    QString& errorMessage)
+{
+    // Путь к исходному шаблону преподавателя
+    QString documents = QStandardPaths::writableLocation(
+        QStandardPaths::DocumentsLocation);
+
+    QString templatePath = QDir(documents).filePath(
+        "ReviewerAssistant/Шаблоны/Рецензия_шаблон.docx");
+
+    QFile file(templatePath);
+
+    if (!file.open(QIODevice::ReadOnly)) {
+        errorMessage = "Не удалось открыть шаблон для "
+            "восстановления списка замечаний";
+        return QDomNode();
+    }
+
+    QByteArray data = file.readAll();
+    file.close();
+
+    struct archive* reader = archive_read_new();
+    archive_read_support_format_zip(reader);
+
+    if (archive_read_open_memory(
+        reader,
+        data.constData(),
+        static_cast<size_t>(data.size())) != ARCHIVE_OK) {
+
+        archive_read_free(reader);
+        errorMessage = "Не удалось прочитать шаблон DOCX";
+        return QDomNode();
+    }
+
+    QByteArray xml;
+    struct archive_entry* entry = nullptr;
+    bool readError = false;
+
+    while (archive_read_next_header(reader, &entry)
+        == ARCHIVE_OK) {
+
+        QString name = QString::fromUtf8(
+            archive_entry_pathname(entry));
+
+        if (name != "word/document.xml") {
+            archive_read_data_skip(reader);
+            continue;
+        }
+
+        char buffer[8192];
+        la_ssize_t count = 0;
+
+        while ((count = archive_read_data(
+            reader, buffer, sizeof(buffer))) > 0) {
+
+            xml.append(buffer, static_cast<qsizetype>(count));
+        }
+
+        if (count < 0)
+            readError = true;
+
+        break;
+    }
+
+    archive_read_free(reader);
+
+    if (readError || xml.isEmpty()) {
+        errorMessage = "Не найден XML исходного шаблона";
+        return QDomNode();
+    }
+
+    QDomDocument templateDocument;
+
+    if (!templateDocument.setContent(xml)) {
+        errorMessage = "Ошибка разбора XML шаблона";
+        return QDomNode();
+    }
+
+    QDomNodeList paragraphs =
+        templateDocument.elementsByTagName("w:p");
+
+    for (int i = 0; i < paragraphs.count(); ++i) {
+
+        QDomNode paragraph = paragraphs.at(i);
+
+        if (paragraphText(paragraph).trimmed() != "Замечания")
+            continue;
+
+        // Первый непустой абзац после заголовка
+        // используем как образец нумерованного пункта.
+        QDomNode node = paragraph.nextSibling();
+
+        while (!node.isNull() && node.nodeName() == "w:p") {
+
+            if (!paragraphText(node).trimmed().isEmpty()) {
+                return targetDocument.importNode(node, true);
+            }
+
+            node = node.nextSibling();
+        }
+
+        break;
+    }
+
+    errorMessage = "В шаблоне не найден образец замечания";
+    return QDomNode();
+}
+
+
 // Работа с замечаниями
 bool replaceRemarksInXml(
     QDomDocument& document,
     const QStringList& newRemarks,
     QString& errorMessage)
 {
-    if (newRemarks.isEmpty()) {
-        errorMessage = "Укажите хотя бы одно замечание";
-        return false;
-    }
 
     for (const QString& remark : newRemarks) {
         if (remark.trimmed().isEmpty()) {
@@ -384,45 +566,8 @@ bool replaceRemarksInXml(
         return false;
     }
 
-    // Собираем существующие замечания после заголовка
-    QList<QDomNode> oldRemarks;
-
-    QDomNode node = heading.nextSibling();
-
-    while (!node.isNull()) {
-
-        if (node.isElement()) {
-
-            // В нашем шаблоне замечания идут подряд
-            // до конца раздела
-            if (node.nodeName() != "w:p") {
-                break;
-            }
-
-            QDomNodeList fragments =
-                node.toElement().elementsByTagName("w:t");
-
-            QString text;
-
-            for (int j = 0; j < fragments.count(); ++j) {
-                text += fragments.at(j).toElement().text();
-            }
-
-            if (!text.trimmed().isEmpty()) {
-                oldRemarks.append(node);
-            }
-        }
-
-        node = node.nextSibling();
-    }
-
-    if (oldRemarks.isEmpty()) {
-        errorMessage = "Не найдены исходные замечания";
-        return false;
-    }
-
-    // Копируем образец первого пункта списка
-    QDomNode example = oldRemarks.first().cloneNode(true);
+    QList<QDomNode> oldRemarks =
+        collectRemarkParagraphs(heading);
 
     // Вспомогательная функция замены текста абзаца
     auto setRemarkText = [&](QDomNode paragraph,
@@ -454,6 +599,45 @@ bool replaceRemarksInXml(
 
             return true;
         };
+
+
+    // Восстанавливаем список, если все замечания удалены
+    if (oldRemarks.isEmpty()) {
+
+        QDomNode example =
+            loadRemarkSample(document, errorMessage);
+
+        if (example.isNull())
+            return false;
+
+        QDomNode parent = heading.parentNode();
+        QDomNode lastNode = heading;
+
+        for (const QString& remark : newRemarks) {
+
+            QDomNode newParagraph = example.cloneNode(true);
+
+            if (!setRemarkText(newParagraph, remark)) {
+                errorMessage = "Не удалось добавить текст замечания";
+                return false;
+            }
+
+            QDomNode inserted =
+                parent.insertAfter(newParagraph, lastNode);
+
+            if (inserted.isNull()) {
+                errorMessage = "Не удалось вставить замечание";
+                return false;
+            }
+
+            lastNode = inserted;
+        }
+
+        return true;
+    }
+
+    // Образец для редактирования существующих замечаний
+    QDomNode example = oldRemarks.first().cloneNode(true);
 
     int oldCount = oldRemarks.size();
     int newCount = newRemarks.size();
@@ -513,7 +697,8 @@ bool replaceRemarksInXml(
 bool ReviewManager::readDocxText(
     const QString& path,
     QString& text,
-    QString& errorMessage)
+    QString& errorMessage,
+    bool remarksOnly)
 {
     text.clear();
     errorMessage.clear();
@@ -593,6 +778,46 @@ bool ReviewManager::readDocxText(
     }
 
     // 5. Собираем текст каждого абзаца
+
+
+    if (remarksOnly) {
+
+        QDomNode heading;
+
+        QDomNodeList paragraphs =
+            document.elementsByTagName("w:p");
+
+        // Находим заголовок раздела
+        for (int i = 0; i < paragraphs.count(); ++i) {
+
+            QDomNode paragraph = paragraphs.at(i);
+
+            if (paragraphText(paragraph).trimmed() == "Замечания") {
+                heading = paragraph;
+                break;
+            }
+        }
+
+        if (heading.isNull()) {
+            errorMessage = "Раздел «Замечания» не найден";
+            return false;
+        }
+
+        QList<QDomNode> remarks =
+            collectRemarkParagraphs(heading);
+
+        // Сохраняем заголовок, поскольку существующий
+        // код окна редактора ищет его в прочитанном тексте.
+        text = "Замечания\n";
+
+        for (const QDomNode& remark : remarks) {
+            text += paragraphText(remark) + "\n";
+        }
+
+        return true;
+    }
+
+
     QDomNodeList paragraphs = document.elementsByTagName("w:p");
 
     for (int i = 0; i < paragraphs.count(); ++i) {
@@ -616,7 +841,8 @@ bool ReviewManager::fillTemplate(
     const QMap<QString, QString>& replacements,
     QString& errorMessage,
     const QStringList& newRemarks,
-    bool updateFilledFields)
+    bool updateFilledFields,
+    bool editRemarks)
 {
     errorMessage.clear();
 
@@ -744,7 +970,7 @@ bool ReviewManager::fillTemplate(
             }
 
             // Если переданы замечания, заменяем их
-            if (!newRemarks.isEmpty()) {
+            if (editRemarks) {
 
                 if (!replaceRemarksInXml(
                     document, newRemarks, errorMessage)) {
