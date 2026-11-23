@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+﻿cmake_minimum_required(VERSION 3.16)
 project(ReviewerAssistant LANGUAGES CXX)
 
 include(qt.cmake)
@@ -16,11 +16,11 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED
         Xml
 )
 
-
 find_package(LibArchive REQUIRED)
 
 qt_standard_project_setup()
 
+# Исходники главного приложения
 set(PROJECT_SOURCES
     main.cpp
     mainwindow.ui
@@ -36,25 +36,17 @@ set(PROJECT_SOURCES
     archive/ArchiveExtractor.cpp
 )
 
+# Создаем главное приложение
 qt_add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
-
-add_executable(ArchiveExtractorTest
-    archive/ArchiveExtractorTest.cpp
-    archive/ArchiveExtractor.cpp
-)
-
-target_link_libraries(ArchiveExtractorTest
-    PRIVATE
-        LibArchive::LibArchive
-)
 
 set_target_properties(${PROJECT_NAME}
     PROPERTIES
         WIN32_EXECUTABLE TRUE
 )
 
+# Линкуем библиотеки для главного приложения
 target_link_libraries(${PROJECT_NAME}
-    PUBLIC
+    PRIVATE
         Qt::Core
         Qt::Gui
         Qt::Widgets
@@ -64,3 +56,20 @@ target_link_libraries(${PROJECT_NAME}
 
 )
 
+# ==========================================
+# БЛОК ДЛЯ ТЕСТОВ (Опционально)
+# ==========================================
+# Убедитесь, что файл archive/ArchiveExtractorTest.cpp существует!
+# Если тесты не нужны, просто закомментируйте или удалите блок ниже.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/archive/ArchiveExtractorTest.cpp")
+    add_executable(ArchiveExtractorTest
+        archive/ArchiveExtractorTest.cpp
+        archive/ArchiveExtractor.cpp
+    )
+
+    target_link_libraries(ArchiveExtractorTest
+        PRIVATE
+            Qt::Core
+            LibArchive::LibArchive
+    )
+endif()
