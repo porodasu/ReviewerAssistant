@@ -34,6 +34,11 @@ set(PROJECT_SOURCES
 
     archive/ArchiveExtractor.h
     archive/ArchiveExtractor.cpp
+
+    
+    SubmissionManager.h
+    SubmissionManager.cpp
+
 )
 
 # Создаем главное приложение
