@@ -18,8 +18,7 @@
 
 namespace
 {
-    const std::wstring OOP_DIRECTORY_NAME = L"ООП";
-    const std::wstring DRAFT_REVIEW_NAME = L"Рецензия_черновик.docx";
+    const std::wstring OOP_DIRECTORY_NAME = L"Участники";
 
     QString PathToQString(const std::filesystem::path& path)
     {
@@ -556,178 +555,6 @@ namespace
         return true;
     }
 
-    bool ContainsOrdinalIgnoreCase(
-        const std::wstring& text,
-        const std::wstring& search)
-    {
-        if (search.empty() || search.size() > text.size())
-            return false;
-
-        for (std::size_t index = 0; index + search.size() <= text.size(); ++index)
-        {
-            const int result = CompareStringOrdinal(
-                text.data() + index,
-                static_cast<int>(search.size()),
-                search.data(),
-                static_cast<int>(search.size()),
-                TRUE);
-
-            if (result == CSTR_EQUAL)
-                return true;
-        }
-
-        return false;
-    }
-
-    bool IsDocExtension(const std::wstring& filename)
-    {
-        const std::filesystem::path path(filename);
-        std::wstring extension = path.extension().native();
-        std::transform(
-            extension.begin(),
-            extension.end(),
-            extension.begin(),
-            [](wchar_t character)
-            {
-                if (character >= L'A' && character <= L'Z')
-                    return static_cast<wchar_t>(character - L'A' + L'a');
-                return character;
-            });
-
-        return extension == L".docx";
-    }
-
-    bool IsDraftReviewName(const std::wstring& filename)
-    {
-        return CompareStringOrdinal(
-            filename.c_str(),
-            static_cast<int>(filename.size()),
-            DRAFT_REVIEW_NAME.c_str(),
-            static_cast<int>(DRAFT_REVIEW_NAME.size()),
-            TRUE) == CSTR_EQUAL;
-    }
-
-    bool FindReviewInPreviousAttempt(
-        const std::filesystem::path& previousAttemptDirectory,
-        std::filesystem::path& reviewPath,
-        QString& errorMessage)
-    {
-        std::vector<std::filesystem::path> children;
-        if (!GetDirectoryChildren(previousAttemptDirectory, children, errorMessage))
-            return false;
-
-        std::vector<std::filesystem::path> finalReviews;
-        std::vector<std::filesystem::path> draftReviews;
-
-        for (const auto& child : children)
-        {
-            const std::wstring filename = child.filename().native();
-            if (!IsDocExtension(filename) ||
-                !ContainsOrdinalIgnoreCase(filename, L"реценз"))
-            {
-                continue;
-            }
-
-            std::error_code error;
-            const auto status = std::filesystem::symlink_status(child, error);
-            if (error)
-            {
-                AppendError(
-                    errorMessage,
-                    QStringLiteral("Не удалось проверить файл рецензии %1: %2")
-                    .arg(PathToQString(child), QString::fromLocal8Bit(error.message().c_str())));
-                return false;
-            }
-
-            if (!std::filesystem::is_regular_file(status) || IsReparsePoint(child))
-            {
-                AppendError(
-                    errorMessage,
-                    QStringLiteral("Файл рецензии не является обычным файлом: %1")
-                    .arg(PathToQString(child)));
-                return false;
-            }
-
-            if (IsDraftReviewName(filename))
-                draftReviews.push_back(child);
-            else
-                finalReviews.push_back(child);
-        }
-
-        // Если в предыдущей попытке есть окончательная рецензия и старый черновик,
-        // используем окончательную. При нескольких окончательных файлах не угадываем.
-        if (finalReviews.size() == 1)
-        {
-            reviewPath = finalReviews.front();
-            return true;
-        }
-
-        if (finalReviews.size() > 1)
-        {
-            AppendError(
-                errorMessage,
-                QStringLiteral(
-                    "В предыдущей попытке найдено несколько файлов рецензии. "
-                    "Невозможно однозначно выбрать документ: %1")
-                .arg(PathToQString(previousAttemptDirectory)));
-            return false;
-        }
-
-        if (draftReviews.size() == 1)
-        {
-            reviewPath = draftReviews.front();
-            return true;
-        }
-
-        if (draftReviews.size() > 1)
-        {
-            AppendError(
-                errorMessage,
-                QStringLiteral("В предыдущей попытке найдено несколько черновиков рецензии: %1")
-                .arg(PathToQString(previousAttemptDirectory)));
-            return false;
-        }
-
-        AppendError(
-            errorMessage,
-            QStringLiteral(
-                "В предыдущей попытке %1 не найдена рецензия (.docx) "
-                "с 'Реценз' в имени файла.")
-            .arg(PathToQString(previousAttemptDirectory)));
-        return false;
-    }
-
-    bool ValidateReviewSource(
-        const std::filesystem::path& reviewSource,
-        QString& errorMessage)
-    {
-        std::error_code error;
-        const auto status = std::filesystem::symlink_status(reviewSource, error);
-
-        if (error || !std::filesystem::is_regular_file(status) ||
-            IsReparsePoint(reviewSource))
-        {
-            AppendError(
-                errorMessage,
-                QStringLiteral("Шаблон или предыдущая рецензия недоступны либо не являются обычным файлом: %1%2")
-                .arg(PathToQString(reviewSource),
-                    error ? QStringLiteral(" — ") + QString::fromLocal8Bit(error.message().c_str())
-                    : QString()));
-            return false;
-        }
-
-        if (!IsDocExtension(reviewSource.filename().native()))
-        {
-            AppendError(
-                errorMessage,
-                QStringLiteral("Ожидается документ рецензии с расширением .docx: %1")
-                .arg(PathToQString(reviewSource)));
-            return false;
-        }
-
-        return true;
-    }
-
     bool CreateTemporaryDirectory(
         const std::filesystem::path& parentDirectory,
         const std::wstring& prefix,
@@ -1003,7 +830,6 @@ namespace
         std::filesystem::path studentDirectory;
         std::filesystem::path stagingDirectory;
         std::filesystem::path finalAttemptDirectory;
-        std::filesystem::path finalReviewPath;
 
         // RAII-защита временного каталога.
         DirectoryGuard stagingGuard;
@@ -1082,6 +908,10 @@ bool SubmissionManager::importArchive(
 {
     results.clear();
     errorMessage.clear();
+
+    // Параметр оставлен для совместимости с существующим вызовом из mainwindow.cpp.
+    // Импорт больше не копирует шаблоны и не создаёт черновики рецензий.
+    Q_UNUSED(templatePath);
 
     try
     {
@@ -1218,52 +1048,6 @@ bool SubmissionManager::importArchive(
                 return false;
             }
 
-            std::filesystem::path reviewSource;
-            if (latestAttempt == 0)
-            {
-                if (templatePath.trimmed().isEmpty())
-                {
-                    AppendError(
-                        errorMessage,
-                        QStringLiteral("Для первой попытки студента %1 необходимо указать шаблон рецензии.")
-                        .arg(QString::fromStdWString(fullName)));
-                    CleanupPendingSubmissions(pending, errorMessage);
-                    return false;
-                }
-
-                filesystemError.clear();
-                reviewSource = std::filesystem::absolute(
-                    std::filesystem::path(templatePath.toStdWString()), filesystemError)
-                    .lexically_normal();
-
-                if (filesystemError || !ValidateReviewSource(reviewSource, errorMessage))
-                {
-                    if (filesystemError)
-                    {
-                        AppendError(
-                            errorMessage,
-                            QStringLiteral("Не удалось определить путь к шаблону рецензии: %1")
-                            .arg(QString::fromLocal8Bit(filesystemError.message().c_str())));
-                    }
-                    CleanupPendingSubmissions(pending, errorMessage);
-                    return false;
-                }
-            }
-            else
-            {
-                const std::filesystem::path previousAttemptDirectory =
-                    studentDirectory /
-                    (std::to_wstring(workNumber) + std::to_wstring(latestAttempt));
-
-                if (!FindReviewInPreviousAttempt(
-                    previousAttemptDirectory, reviewSource, errorMessage) ||
-                    !ValidateReviewSource(reviewSource, errorMessage))
-                {
-                    CleanupPendingSubmissions(pending, errorMessage);
-                    return false;
-                }
-            }
-
             bool studentDirectoryWasCreated = false;
             if (!studentDirectoryExists)
             {
@@ -1341,7 +1125,6 @@ bool SubmissionManager::importArchive(
             item.stagingDirectory = stagingGuard.getPath();
 
             item.finalAttemptDirectory = finalAttemptDirectory;
-            item.finalReviewPath = finalAttemptDirectory / DRAFT_REVIEW_NAME;
 
             item.fullName = fullName;
 
@@ -1364,41 +1147,6 @@ bool SubmissionManager::importArchive(
                 return false;
             }
 
-            const std::filesystem::path stagedReviewPath =
-                current.stagingDirectory / DRAFT_REVIEW_NAME;
-
-            bool stagedReviewAlreadyExists = false;
-            filesystemError.clear();
-            if (!PathExists(stagedReviewPath, stagedReviewAlreadyExists, filesystemError) ||
-                stagedReviewAlreadyExists)
-            {
-                AppendError(
-                    errorMessage,
-                    QStringLiteral(
-                        "Невозможно создать %1: в отправленной работе уже есть файл с таким именем.")
-                    .arg(PathToQString(stagedReviewPath)));
-                CleanupPendingSubmissions(pending, errorMessage);
-                return false;
-            }
-
-            filesystemError.clear();
-            std::filesystem::copy_file(
-                reviewSource,
-                stagedReviewPath,
-                std::filesystem::copy_options::none,
-                filesystemError);
-
-            if (filesystemError)
-            {
-                AppendError(
-                    errorMessage,
-                    QStringLiteral("Не удалось скопировать рецензию %1 в %2: %3")
-                    .arg(PathToQString(reviewSource),
-                        PathToQString(stagedReviewPath),
-                        QString::fromLocal8Bit(filesystemError.message().c_str())));
-                CleanupPendingSubmissions(pending, errorMessage);
-                return false;
-            }
         }
 
         // Все попытки подготовлены во временных каталогах, но ещё не перенесены
@@ -1437,7 +1185,7 @@ bool SubmissionManager::importArchive(
             // MoveFileW не заменяет уже существующий каталог назначения.
             // Папка staging находится рядом с final, поэтому перенос остаётся
             // в пределах одного тома и выполняется как атомарное переименование.
-           
+
             if (!MoveFileW(
                 item.stagingDirectory.c_str(),
                 item.finalAttemptDirectory.c_str()))
@@ -1470,7 +1218,7 @@ bool SubmissionManager::importArchive(
             info.workNumber = item.workNumber;
             info.attemptNumber = item.attemptNumber;
             info.folderPath = PathToQString(item.finalAttemptDirectory);
-            info.reviewPath = PathToQString(item.finalReviewPath);
+            info.reviewPath.clear(); // Рецензия создаётся отдельно через ReviewManager.
             results.append(info);
         }
 

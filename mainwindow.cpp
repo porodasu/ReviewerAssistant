@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "DocumentReader.h"
 #include "ReviewManager.h"
+#include "SubmissionManager.h"
 #include <QDir>
 #include <QInputDialog>
 #include <QDate>
@@ -528,35 +529,104 @@ MainWindow::MainWindow(QWidget* parent)
         });
 
     // Распаковка выбранного архива
+
     connect(ui.btnExtractArchive, &QPushButton::clicked,
         this, [this]() {
 
-            if (selectedArchivePath.isEmpty()) {
+            if (selectedArchivePath.isEmpty())
+                return;
+
+            // Выбираем тип работы
+            QStringList workOptions = {
+                "Лабораторная работа №1",
+                "Лабораторная работа №2",
+                "Курсовой проект"
+            };
+
+            bool ok = false;
+
+            QString selection = QInputDialog::getItem(
+                this,
+                "Импорт работ",
+                "Выберите тип работы:",
+                workOptions,
+                0,
+                false,
+                &ok
+            );
+
+            if (!ok)
+                return;
+
+            WorkType workType = WorkType::Lab1;
+
+            if (selection == workOptions[1])
+                workType = WorkType::Lab2;
+            else if (selection == workOptions[2])
+                workType = WorkType::CourseProject;
+
+            // Корневой каталог приложения
+            QString documents = QStandardPaths::writableLocation(
+                QStandardPaths::DocumentsLocation);
+
+            QString rootPath = QDir(documents).filePath(
+                "ReviewerAssistant");
+
+            // Общий шаблон рецензии
+            QString templatePath = QDir(rootPath).filePath(
+                "Шаблоны/Рецензия_шаблон.docx");
+
+            if (!QFileInfo(templatePath).isFile()) {
+                QMessageBox::warning(
+                    this,
+                    "Ошибка",
+                    "Шаблон рецензии не найден:\n" + templatePath
+                );
                 return;
             }
 
-            ArchiveExtractor extractor;
-            std::string errorMessage;
+            QList<SubmissionInfo> results;
+            QString errorMessage;
 
-            bool success = extractor.extract(
-                std::filesystem::path(selectedArchivePath.toStdWString()),
-                std::filesystem::path(participantsPath.toStdWString()),
+            // Импортируем архив через модуль напарника
+            bool success = SubmissionManager::importArchive(
+                selectedArchivePath,
+                rootPath,
+                workType,
+                templatePath,
+                results,
                 errorMessage
             );
 
-            if (success) {
-                refreshParticipants();
+            // Обновляем список даже при частичной ошибке
+            refreshParticipants();
 
-                QMessageBox::information(this, "Готово",
-                    "Архив успешно распакован!");
+            if (!success) {
+                QMessageBox::warning(
+                    this,
+                    "Ошибка импорта",
+                    errorMessage +
+                    "\n\nУспешно импортировано работ: " +
+                    QString::number(results.size())
+                );
+                return;
             }
-            else {
-                QMessageBox::warning(this, "Ошибка распаковки",
 
-                    QString::fromUtf8(errorMessage.c_str()));
+            // Защита от повторного импорта тем же нажатием
+            selectedArchivePath.clear();
+            ui.lblArchivePath->setText("Архив не выбран");
+            ui.lblArchivePath->setToolTip(QString());
+            ui.btnExtractArchive->setEnabled(false);
 
-            }
+            QMessageBox::information(
+                this,
+                "Готово",
+                "Импорт успешно завершён.\n"
+                "Количество работ: " +
+                QString::number(results.size())
+            );
         });
+
 
 
 
